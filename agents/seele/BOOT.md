@@ -1,3 +1,3 @@
-- 执行 `node ~/.openclaw/nerv/scripts/spear_sync.js`
+- 执行 `node ~/.openclaw/nerv/scripts/security_probe.js --window 30`
 - 检查 audit_logs 中最近 1h 的高危操作记录
 - 无异常 → HEARTBEAT_OK

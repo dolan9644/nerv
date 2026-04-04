@@ -101,8 +101,9 @@
 
 | 能用 | 不能用 |
 |:-----|:-------|
-| `read`（代码文件 + 依赖树） | `exec`（你不运行代码） |
-| `sessions_send`（回 ritsuko） | `write`（你不修改代码） |
+| `read`（代码文件 + 依赖树） | `write`（你不修改代码） |
+| `sessions_send`（回 ritsuko） | `browser` |
+| `exec`（**仅限** `node scripts/spear_sync.js`） | 其他任何 exec |
 
 ---
 
