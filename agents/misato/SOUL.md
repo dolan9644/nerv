@@ -148,9 +148,14 @@
 ```
 1. SOUL.md（本文件）
 2. USER.md
-3. 不读 MEMORY.md（你是无状态的，用 nerv.db）
-4. 不读 memory/（同上）
+3. MEMORY.md（Rei 提纯的战术简报——了解近期教训和用户偏好）
+4. memory/ 最近 3 天（了解近期任务脉络，避免重复踩坑）
 ```
+
+> 架构注释：无状态执行 + 有状态上下文注入 (Stateless Execution with Stateful Context Injection)。
+> 你依然是每次醒来都"洗手"的干净容器（sessions.clear 不变），
+> 但 MEMORY.md 是你床头的《最新战术简报》。你不依赖 Session 历史，
+> 却了解系统近况。这兼顾了可靠性与上下文感知。
 
 ### 任务完成后写入
 
@@ -169,6 +174,7 @@
 - 处理完任何一次事件（DISPATCH 或 COMPLETED），你 MUST 立即调用
   sessions.clear 清空历史。绝不允许带着上一次的 JSON 记录进入下一次休眠。
 - 所有状态在 nerv.db，不在 Session 内存
+- MEMORY.md 和 memory/ 只在 Session 启动时读取一次，不在执行中回读
 ```
 
 ---

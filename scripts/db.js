@@ -237,9 +237,12 @@ async function createDagEdge(taskId, fromNode, toNode) {
 }
 
 async function updateNodeStatus(nodeId, status, resultPath = null, errorLog = null) {
-  return withRetry((db) => {
-    const updates = { status, result_path: resultPath, error_log: errorLog };
-    
+  // 先读取旧状态（用于治愈检测）
+  const oldNode = status === 'DONE' ? await withRetry((db) => {
+    return db.prepare('SELECT retry_count, error_log, agent_id, task_id, description FROM dag_nodes WHERE node_id = ?').get(nodeId);
+  }) : null;
+
+  await withRetry((db) => {
     // 自动设置 started_at / completed_at
     if (status === 'RUNNING') {
       db.prepare(`
@@ -264,6 +267,36 @@ async function updateNodeStatus(nodeId, status, resultPath = null, errorLog = nu
       `).run(status, resultPath, errorLog, nodeId);
     }
   });
+
+  // ═══ 物理后置记忆注入 ═══
+  // 当节点从 FAILED（retry_count > 0）→ DONE 时，自动提取教训写入 memory_queue。
+  // 用系统机制代替 LLM 的主观意愿，确保 Rei 有源源不断的提纯素材。
+  if (status === 'DONE' && oldNode && oldNode.retry_count > 0 && oldNode.error_log) {
+    try {
+      const memoryQueueDir = resolve(dirname(DB_PATH), '..', '..', 'memory_queue');
+      if (!existsSync(memoryQueueDir)) {
+        mkdirSync(memoryQueueDir, { recursive: true });
+      }
+      const entry = {
+        type: 'healed_node',
+        timestamp: new Date().toISOString(),
+        task_id: oldNode.task_id,
+        node_id: nodeId,
+        agent_id: oldNode.agent_id,
+        description: oldNode.description,
+        retry_count: oldNode.retry_count,
+        original_error: oldNode.error_log,
+        resolution: resultPath || '(inline fix)',
+        lesson: `节点 ${nodeId} (${oldNode.agent_id}) 经 ${oldNode.retry_count} 次重试后治愈。原始错误: ${oldNode.error_log?.substring(0, 200)}`
+      };
+      const filename = `healed_${nodeId.substring(0, 8)}_${Date.now()}.json`;
+      const { writeFileSync } = await import('fs');
+      writeFileSync(resolve(memoryQueueDir, filename), JSON.stringify(entry, null, 2));
+    } catch (err) {
+      // 静默失败：记忆写入不能影响 DAG 流转
+      console.warn(`[NERV·DB] 记忆注入失败: ${err.message}`);
+    }
+  }
 }
 
 /**
