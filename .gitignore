@@ -15,12 +15,17 @@ node_modules/
 dist/
 .vite/
 
-# 环境变量 / 密钥
+# 环境变量 / 密钥 / 备份（含真实凭证）
 .env
 .env.*
+!.env.example
 *.key
 *.pem
 *.secret
+openclaw_backup.json
+openclaw.json.bak*
+openclaw.json.clobbered.*
+*.pre-nerv.bak
 
 # 系统文件
 .DS_Store
