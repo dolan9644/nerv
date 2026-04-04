@@ -1,0 +1,19 @@
+{
+  "platforms": {
+    "xhs": {
+      "enabled": true,
+      "cookie_path": "~/.openclaw/nerv/secrets/xhs_cookie.json"
+    },
+    "douyin": {
+      "enabled": false
+    },
+    "wechat_mp": {
+      "enabled": false
+    },
+    "feishu": {
+      "enabled": true,
+      "app_id": "ENV:FEISHU_APP_ID",
+      "app_secret": "ENV:FEISHU_APP_SECRET"
+    }
+  }
+}

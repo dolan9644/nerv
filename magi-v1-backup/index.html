@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MAGI System — NERV Tactical Dashboard</title>
+  <meta name="description" content="NERV 本部战术系统实时监控面板">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Orbitron:wght@400;500;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- ═══ 顶部状态栏 ═══ -->
+  <header id="header">
+    <div class="header-left">
+      <div class="nerv-logo">
+        <span class="logo-text">NERV</span>
+        <span class="logo-sub">本部</span>
+      </div>
+      <div class="system-label">MAGI SYSTEM</div>
+    </div>
+    <div class="header-center">
+      <div class="clock" id="clock">00:00:00</div>
+      <div class="date" id="date">2026-04-04</div>
+    </div>
+    <div class="header-right">
+      <div class="sync-indicator" id="sync-indicator">
+        <span class="sync-dot"></span>
+        <span class="sync-text">SPEAR SYNC</span>
+      </div>
+      <div class="heartbeat-timer" id="heartbeat-timer">NEXT HB: --:--</div>
+    </div>
+  </header>
+
+  <!-- ═══ 主面板 ═══ -->
+  <main id="main">
+    <!-- 左侧：Agent 状态矩阵 -->
+    <section class="panel agent-matrix" id="agent-panel">
+      <div class="panel-header">
+        <span class="panel-icon">◆</span>
+        <span class="panel-title">AGENT STATUS MATRIX</span>
+        <span class="panel-count" id="agent-count">15 UNITS</span>
+      </div>
+      <div class="agent-grid" id="agent-grid">
+        <!-- JS 填充 -->
+      </div>
+    </section>
+
+    <!-- 中间：DAG 可视化 -->
+    <section class="panel dag-view" id="dag-panel">
+      <div class="panel-header">
+        <span class="panel-icon">◇</span>
+        <span class="panel-title">ACTIVE DAG PIPELINE</span>
+        <span class="panel-badge" id="dag-badge">NO ACTIVE DAG</span>
+      </div>
+      <div class="dag-canvas" id="dag-canvas">
+        <div class="dag-empty" id="dag-empty">
+          <div class="hex-pattern"></div>
+          <p>AWAITING DISPATCH ORDER</p>
+          <p class="sub">misato → sessions_send → target agent</p>
+        </div>
+        <svg id="dag-svg" width="100%" height="100%" style="display:none"></svg>
+      </div>
+    </section>
+
+    <!-- 右侧：任务日志 -->
+    <section class="panel task-log" id="log-panel">
+      <div class="panel-header">
+        <span class="panel-icon">◈</span>
+        <span class="panel-title">OPERATION LOG</span>
+        <span class="panel-badge log-filter" id="log-filter">ALL</span>
+      </div>
+      <div class="log-entries" id="log-entries">
+        <!-- JS 填充 -->
+      </div>
+    </section>
+  </main>
+
+  <!-- ═══ 底部 MAGI 三机体决议 ═══ -->
+  <footer id="footer">
+    <div class="magi-unit" id="magi-melchior">
+      <div class="magi-name">MELCHIOR-1</div>
+      <div class="magi-role">科学家</div>
+      <div class="magi-status" id="melchior-status">STANDBY</div>
+    </div>
+    <div class="magi-unit" id="magi-balthasar">
+      <div class="magi-name">BALTHASAR-2</div>
+      <div class="magi-role">母亲</div>
+      <div class="magi-status" id="balthasar-status">STANDBY</div>
+    </div>
+    <div class="magi-unit" id="magi-casper">
+      <div class="magi-name">CASPER-3</div>
+      <div class="magi-role">女人</div>
+      <div class="magi-status" id="casper-status">STANDBY</div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,2 @@
+- 执行 `node ~/.openclaw/nerv/scripts/spear_sync.js`
+- HEARTBEAT_OK

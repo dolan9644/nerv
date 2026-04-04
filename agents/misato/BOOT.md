@@ -1,0 +1,3 @@
+- 执行 `node ~/.openclaw/nerv/scripts/skill_scanner.js`
+- 执行 `node ~/.openclaw/nerv/scripts/spear_sync.js`
+- 清理遗留孤岛节点后，HEARTBEAT_OK

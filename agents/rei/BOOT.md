@@ -1,0 +1,3 @@
+- 检查 memory/ 目录完整性
+- 执行 `node ~/.openclaw/nerv/scripts/spear_sync.js`
+- HEARTBEAT_OK

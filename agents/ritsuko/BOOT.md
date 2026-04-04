@@ -1,0 +1,3 @@
+- 检查上次运行的代码任务是否完成
+- 执行 `node ~/.openclaw/nerv/scripts/spear_sync.js`
+- HEARTBEAT_OK

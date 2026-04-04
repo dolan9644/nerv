@@ -1,0 +1,3 @@
+- 执行 `node ~/.openclaw/nerv/scripts/spear_sync.js`
+- 检查挂起的数据抓取任务
+- HEARTBEAT_OK

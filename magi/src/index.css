@@ -1,0 +1,198 @@
+/* ═══ NERV MAGI — 戰情室全域樣式 v3.1 ═══ */
+/* 六角幾何 · 橙色警示光暈 · 矩陣掃描過渡 */
+
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Noto+Sans+TC:wght@300;400;700&display=swap');
+
+:root {
+  /* ─ 核心色板 ─ */
+  --nerv-dark: #0a0a1a;
+  --nerv-darker: #060612;
+  --nerv-panel: #0d0d24;
+  --nerv-border: #1a1a3a;
+  --nerv-border-glow: rgba(255, 107, 0, 0.15);
+  --nerv-orange: #ff6b00;
+  --nerv-orange-dim: rgba(255, 107, 0, 0.08);
+  --nerv-orange-glow: rgba(255, 107, 0, 0.3);
+  --nerv-cyan: #00d4ff;
+  --nerv-cyan-dim: rgba(0, 212, 255, 0.08);
+  --nerv-green: #00ff88;
+  --nerv-green-dim: rgba(0, 255, 136, 0.08);
+  --nerv-red: #ff2d55;
+  --nerv-red-dim: rgba(255, 45, 85, 0.08);
+  --nerv-red-glow: rgba(255, 45, 85, 0.4);
+  --nerv-yellow: #ffc107;
+  --nerv-white: #e0e0f0;
+  --nerv-text: #c0c0d8;
+  --nerv-text-dim: #606080;
+
+  /* ─ 排版 ─ */
+  --font-display: 'Orbitron', monospace;
+  --font-body: 'Noto Sans TC', -apple-system, sans-serif;
+  --gap: 12px;
+  --radius: 4px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--nerv-darker);
+  color: var(--nerv-text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ═══ 六角形背景纹理 ═══ */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    repeating-linear-gradient(60deg, transparent 0, transparent 40px, rgba(255,107,0,0.015) 40px, rgba(255,107,0,0.015) 41px),
+    repeating-linear-gradient(-60deg, transparent 0, transparent 40px, rgba(0,212,255,0.01) 40px, rgba(0,212,255,0.01) 41px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ═══ 面板统一 ═══ */
+.panel {
+  background: var(--nerv-panel);
+  border: 1px solid var(--nerv-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  position: relative;
+}
+
+.panel::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 10%, var(--nerv-orange) 50%, transparent 90%);
+  opacity: 0.4;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--nerv-border);
+  background: linear-gradient(180deg, rgba(255,107,0,0.04) 0%, transparent 100%);
+}
+
+.panel-icon {
+  color: var(--nerv-orange);
+  font-size: 14px;
+  text-shadow: 0 0 8px var(--nerv-orange-glow);
+}
+
+.panel-title {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  color: var(--nerv-white);
+  text-transform: uppercase;
+}
+
+.panel-badge {
+  margin-left: auto;
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--nerv-text-dim);
+  padding: 2px 8px;
+  border: 1px solid var(--nerv-border);
+  border-radius: 2px;
+}
+
+/* ═══ 脉冲动画 ═══ */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: var(--nerv-orange); box-shadow: 0 0 8px var(--nerv-orange-glow); }
+  50% { border-color: var(--nerv-yellow); box-shadow: 0 0 16px rgba(255,193,7,0.3); }
+}
+
+@keyframes circuit-break {
+  0%, 100% { opacity: 1; border-color: var(--nerv-red); }
+  50% { opacity: 0.3; border-color: transparent; }
+}
+
+@keyframes scan-line {
+  0% { top: 0; }
+  100% { top: 100%; }
+}
+
+.pulse { animation: pulse 2s ease-in-out infinite; }
+.pulse-border { animation: pulse-border 1.5s ease-in-out infinite; }
+
+/* ═══ 标签页导航 + 矩陣掃描過渡 ═══ */
+.tab-nav {
+  display: flex;
+  gap: 2px;
+  padding: 0 var(--gap);
+  background: var(--nerv-darker);
+  border-bottom: 1px solid var(--nerv-border);
+  flex-shrink: 0;
+}
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  padding: 8px 20px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--nerv-text-dim);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+  position: relative;
+  overflow: hidden;
+}
+
+.tab-btn::before {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%; width: 100%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,107,0,0.06), transparent);
+  transition: left 0.4s ease;
+}
+
+.tab-btn:hover::before { left: 100%; }
+
+/* 矩陣掃描過渡動畫 */
+@keyframes matrix-scan {
+  0% { clip-path: inset(0 100% 0 0); opacity: 0; }
+  40% { opacity: 1; }
+  100% { clip-path: inset(0 0 0 0); opacity: 1; }
+}
+
+.main-grid > *,
+.main-grid .full-panel {
+  animation: matrix-scan 0.35s ease-out;
+}
+
+.tab-btn:hover {
+  color: var(--nerv-text);
+  background: rgba(255,107,0,0.03);
+}
+
+.tab-btn.active {
+  color: var(--nerv-orange);
+  border-bottom-color: var(--nerv-orange);
+  text-shadow: 0 0 10px var(--nerv-orange-glow);
+}
+
+/* ═══ 滚动条 ═══ */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--nerv-border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--nerv-orange); }
