@@ -3,10 +3,15 @@ set -e
 
 # ═══ NERV 飛書長連接 · 深度診斷與兼容性修復 ═══
 
-NERV_DIR="/Users/dolan/.openclaw/nerv"
-PLIST_PATH="/Users/dolan/Library/LaunchAgents/com.nerv.misato.plist"
+NERV_DIR="${HOME}/.openclaw/nerv"
+PLIST_PATH="${HOME}/Library/LaunchAgents/com.nerv.misato.plist"
 VENV_DIR="$NERV_DIR/.venv_nerv"
-HOST_PYTHON="/opt/homebrew/bin/python3.11"
+# 动态检测 Python3 路径（兼容 Homebrew / 系统 / pyenv）
+HOST_PYTHON=$(which python3.11 2>/dev/null || which python3 2>/dev/null || echo "python3")
+if [ ! -x "$HOST_PYTHON" ]; then
+  echo "❌ 未找到 Python3，请先安装"
+  exit 1
+fi
 
 echo "🗡️  [NERV] 啟動深度診斷程序..."
 

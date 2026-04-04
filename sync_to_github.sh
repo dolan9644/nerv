@@ -1,7 +1,7 @@
 #!/bin/bash
 # ═══ NERV GitHub 同步腳本 ═══
 
-NERV_DIR="/Users/dolan/.openclaw/nerv"
+NERV_DIR="${HOME}/.openclaw/nerv"
 cd "$NERV_DIR"
 
 echo "🗡️  [NERV] 正在預檢安全項..."

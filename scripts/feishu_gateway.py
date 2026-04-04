@@ -51,16 +51,15 @@ def route_to_misato(user_text, chat_id):
     logger.info(f"🗡️ [NERV] 路由到 Misato: {user_text[:50]}")
     
     try:
-        openclaw_bin = "/usr/local/bin/openclaw"
-        if not os.path.exists(openclaw_bin):
-            openclaw_bin = "openclaw"
+        import shutil
+        openclaw_bin = shutil.which("openclaw") or "openclaw"
             
         result = subprocess.run(
             [openclaw_bin, "agent", "nerv-misato", user_text],
             capture_output=True,
             text=True,
             timeout=180,
-            cwd="/Users/dolan/.openclaw/nerv"
+            cwd=str(Path.home() / ".openclaw" / "nerv")
         )
 
         if result.returncode == 0:

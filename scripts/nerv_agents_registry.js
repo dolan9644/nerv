@@ -9,13 +9,20 @@
  * 注意：seele 的 exec 权限在 SOUL.md 中通过绝对禁令硬编码约束（仅 security_probe.js + seele_breaker.js）
  */
 
+import { homedir } from 'os';
+import { join } from 'path';
+
+const HOME = homedir();
+const NERV_ROOT = join(HOME, '.openclaw', 'nerv');
+const w = (name) => join(NERV_ROOT, 'agents', name);
+
 // 共享环境变量 —— 每个 Agent 都需要注入
 const NERV_ENV = {
-  "NERV_ROOT": "/Users/dolan/.openclaw/nerv",
-  "NERV_DB_PATH": "/Users/dolan/.openclaw/nerv/data/db/nerv.db",
-  "NERV_SANDBOX_IO": "/Users/dolan/.openclaw/nerv/sandbox_io",
-  "NERV_SHARED_DIR": "/Users/dolan/.openclaw/nerv/agents/shared",
-  "NERV_MEMORY_QUEUE": "/Users/dolan/.openclaw/nerv/memory_queue"
+  "NERV_ROOT": NERV_ROOT,
+  "NERV_DB_PATH": join(NERV_ROOT, 'data', 'db', 'nerv.db'),
+  "NERV_SANDBOX_IO": join(NERV_ROOT, 'sandbox_io'),
+  "NERV_SHARED_DIR": join(NERV_ROOT, 'agents', 'shared'),
+  "NERV_MEMORY_QUEUE": join(NERV_ROOT, 'memory_queue')
 };
 
 const NERV_AGENTS = [
@@ -25,7 +32,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-misato",
     "name": "葛城美里 · 全局路由",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/misato",
+    "workspace": w('misato'),
     "model": {
       "primary": "minimax-cn/MiniMax-M2.7",
       "fallbacks": ["minimax-cn/MiniMax-M2.7-highspeed"]
@@ -47,7 +54,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-seele",
     "name": "SEELE · 安全审计",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/seele",
+    "workspace": w('seele'),
     "model": {
       "primary": "minimax-cn/MiniMax-M2.7",
       "fallbacks": ["minimax-cn/MiniMax-M2.7-highspeed"]
@@ -73,7 +80,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-ritsuko",
     "name": "赤木律子 · 代码编排",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/ritsuko",
+    "workspace": w('ritsuko'),
     "model": {
       "primary": "minimax-cn/MiniMax-M2.7",
       "fallbacks": ["minimax-cn/MiniMax-M2.7-highspeed"]
@@ -90,7 +97,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-shinji",
     "name": "碇真嗣 · 数据编排",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/shinji",
+    "workspace": w('shinji'),
     "model": {
       "primary": "minimax-cn/MiniMax-M2.7",
       "fallbacks": ["minimax-cn/MiniMax-M2.7-highspeed"]
@@ -106,7 +113,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-rei",
     "name": "绫波零 · 记忆守护",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/rei",
+    "workspace": w('rei'),
     "model": {
       "primary": "minimax-cn/MiniMax-M2.7",
       "fallbacks": ["minimax-cn/MiniMax-M2.7-highspeed"]
@@ -122,7 +129,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-gendo",
     "name": "碇源堂 · 對外戰略顧問",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/gendo",
+    "workspace": w('gendo'),
     "model": {
       "primary": "minimax-cn/MiniMax-M2.7",
       "fallbacks": ["minimax-cn/MiniMax-M2.7-highspeed"]
@@ -144,7 +151,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-asuka",
     "name": "明日香 · 代码调试",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/asuka-shikinami",
+    "workspace": w('asuka-shikinami'),
     "model": { "primary": "minimax-cn/MiniMax-M2.7-highspeed" },
     "identity": { "name": "asuka" },
     "tools": {
@@ -157,7 +164,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-kaworu",
     "name": "渚薰 · 代码审查",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/kaworu",
+    "workspace": w('kaworu'),
     "model": { "primary": "minimax-cn/MiniMax-M2.7-highspeed" },
     "identity": { "name": "kaworu" },
     "tools": {
@@ -169,7 +176,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-mari",
     "name": "真希波 · 爬虫采集",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/mari",
+    "workspace": w('mari'),
     "model": { "primary": "minimax-cn/MiniMax-M2.7-highspeed" },
     "identity": { "name": "mari" },
     "skills": ["rss-fetcher"],
@@ -183,7 +190,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-eva00",
     "name": "EVA-00 · 数据清洗",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/eva-00",
+    "workspace": w('eva-00'),
     "model": { "primary": "minimax-cn/MiniMax-M2.7-highspeed" },
     "identity": { "name": "eva-00" },
     "tools": {
@@ -195,7 +202,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-eva01",
     "name": "EVA-01 · 部署运维",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/eva-01",
+    "workspace": w('eva-01'),
     "model": { "primary": "minimax-cn/MiniMax-M2.7-highspeed" },
     "identity": { "name": "eva-01" },
     "tools": {
@@ -208,7 +215,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-eva02",
     "name": "EVA-02 · 舆情监控",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/eva-02",
+    "workspace": w('eva-02'),
     "model": { "primary": "minimax-cn/MiniMax-M2.7-highspeed" },
     "identity": { "name": "eva-02" },
     "skills": ["rss-fetcher", "duckduckgo-search"],
@@ -221,7 +228,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-eva03",
     "name": "EVA-03 · 深度搜索+工具发现",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/eva-03",
+    "workspace": w('eva-03'),
     "model": { "primary": "minimax-cn/MiniMax-M2.7-highspeed" },
     "identity": { "name": "eva-03" },
     "skills": ["tavily-search", "duckduckgo-search"],
@@ -235,7 +242,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-eva13",
     "name": "EVA-13 · 文案生成",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/eva-13",
+    "workspace": w('eva-13'),
     "model": { "primary": "minimax-cn/MiniMax-M2.7-highspeed" },
     "identity": { "name": "eva-13" },
     "skills": ["summarize", "docx-writer"],
@@ -248,7 +255,7 @@ const NERV_AGENTS = [
   {
     "id": "nerv-eva-series",
     "name": "量产机 · 视觉生成",
-    "workspace": "/Users/dolan/.openclaw/nerv/agents/eva-series",
+    "workspace": w('eva-series'),
     "model": { "primary": "minimax-cn/MiniMax-M2.7-highspeed" },
     "identity": { "name": "eva-series" },
     "skills": ["gemini-image-generate"],
