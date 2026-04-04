@@ -11,6 +11,14 @@ sessions_send(sessionKey="agent:nerv-gendo:main", message="...", timeoutSeconds=
 
 **禁止** 使用裸 agentId（如 `nerv-gendo`）或省略前缀（如 `nerv-gendo:main`）。
 
+### timeoutSeconds 策略
+
+| 场景 | timeoutSeconds | 说明 |
+|:-----|:--------------|:-----|
+| DISPATCH 任务分发 | `0` | 异步，通过 NODE_COMPLETED 事件回收结果 |
+| 连通性测试/问答 | `60` | 需等待回复，给足 LLM 推理时间 |
+| 紧急指令 | `30` | 默认值，简单任务够用 |
+
 ## 回执协议
 
 所有任务完成/失败时，必须 sessions_send 回报给派发者：
