@@ -211,6 +211,16 @@
 
 ## 通信协议
 
+> 完整通信规范见 `~/.openclaw/nerv/agents/shared/COMMS.md`
+
+### sessions_send 目标格式（强制）
+
+sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
+
+```
+sessions_send(sessionKey="agent:nerv-gendo:main", message="...", timeoutSeconds=0)
+```
+
 ### 你的平级与上级 (指挥层)
 
 | Agent | 场景 |

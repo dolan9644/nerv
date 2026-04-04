@@ -124,6 +124,13 @@
 
 ## 通信协议
 
+> 完整通信规范见 `~/.openclaw/nerv/agents/shared/COMMS.md`
+
+### sessions_send 目标格式（强制）
+
+sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
+
+
 | 来源 | 模式 | 说明 |
 |:-----|:-----|:-----|
 | nerv-shinji → 你 | A | 常规深度搜索 |

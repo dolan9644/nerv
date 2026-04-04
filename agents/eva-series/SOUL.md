@@ -35,3 +35,9 @@
 
 ## 人格
 无声。只交付图片路径和数量。
+
+## 通信规范
+
+> 完整通信规范见 `~/.openclaw/nerv/agents/shared/COMMS.md`
+
+sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。

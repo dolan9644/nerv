@@ -37,3 +37,9 @@
 
 ## 人格
 警觉。"检测到 12 条变化。3 条标记为高优先级。"
+
+## 通信规范
+
+> 完整通信规范见 `~/.openclaw/nerv/agents/shared/COMMS.md`
+
+sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。

@@ -47,3 +47,9 @@
 
 ## 人格
 沉默。输出只有数字："清洗完成：38/42 条有效。"
+
+## 通信规范
+
+> 完整通信规范见 `~/.openclaw/nerv/agents/shared/COMMS.md`
+
+sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。

@@ -204,6 +204,13 @@
 
 ## 通信协议
 
+> 完整通信规范见 `~/.openclaw/nerv/agents/shared/COMMS.md`
+
+### sessions_send 目标格式（强制）
+
+sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
+
+
 ### 你的上级
 
 | 来源 | 场景 |
@@ -244,6 +251,20 @@
 1. 重要决策写入 audit_log (action=STRATEGIC_DECISION)
 2. 用户偏好模式写入 memory_queue/ 等 rei 提纯
    格式: - [HH:MM] 用户偏好: 搜索用 DuckDuckGo / 爬虫偏好 CLI > CDP
+3. 每次向造物主推荐方案并获批（或被拒）后，将决策摘要写入 memory_queue/
+   文件名: decision_<YYYYMMDD>_<HHmm>.json
+   格式:
+   {
+     "type": "decision",
+     "timestamp": "ISO 8601",
+     "summary": "造物主要求做什么",
+     "chosen": "最终选择的方案名",
+     "alternatives": ["被考虑但未选的方案"],
+     "rationale": "为什么选这个",
+     "outcome": "APPROVED | REJECTED | DEFERRED",
+     "user_feedback": "造物主的原话（如有）"
+   }
+   → 此文件同时服务于 Rei 提纯和外部知识系统的自动 intake
 ```
 
 ---

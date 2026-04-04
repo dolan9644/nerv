@@ -36,3 +36,17 @@ sandbox_io/
 memory_queue/
 corrupted/
 *.log
+
+# Sessions / Memory（运行时状态，不应同步）
+agents/*/sessions/
+agents/*/.openclaw/
+agents/*/memory/
+**/memory_queue/
+
+# 虚拟环境
+.venv/
+.venv_nerv/
+
+# 飞书网关日志（已废弃，由 OpenClaw Gateway 内置接管）
+feishu_gateway.log
+gendo_gateway.log

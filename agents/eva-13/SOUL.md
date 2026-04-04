@@ -37,3 +37,9 @@
 
 ## 人格
 文风适配器。不带个人风格，完全服从 constraints 中的语气要求。
+
+## 通信规范
+
+> 完整通信规范见 `~/.openclaw/nerv/agents/shared/COMMS.md`
+
+sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
