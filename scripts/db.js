@@ -11,6 +11,7 @@
 import Database from 'better-sqlite3';
 import { resolve, dirname } from 'path';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
+import { writeFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -290,8 +291,7 @@ async function updateNodeStatus(nodeId, status, resultPath = null, errorLog = nu
         lesson: `节点 ${nodeId} (${oldNode.agent_id}) 经 ${oldNode.retry_count} 次重试后治愈。原始错误: ${oldNode.error_log?.substring(0, 200)}`
       };
       const filename = `healed_${nodeId.substring(0, 8)}_${Date.now()}.json`;
-      const { writeFileSync } = await import('fs');
-      writeFileSync(resolve(memoryQueueDir, filename), JSON.stringify(entry, null, 2));
+      await writeFile(resolve(memoryQueueDir, filename), JSON.stringify(entry, null, 2));
     } catch (err) {
       // 静默失败：记忆写入不能影响 DAG 流转
       console.warn(`[NERV·DB] 记忆注入失败: ${err.message}`);
@@ -545,45 +545,46 @@ async function resolveApproval(id, status, resolvedBy = '造物主') {
  * @param {Array<{node_id, agent_id, description, depth?, max_retries?}>} params.nodes
  * @param {Array<{from, to}>} params.edges
  */
-function createFullDag({ taskId, initiatorId, intent, priority = 0, nodes, edges = [] }) {
-  const db = getDb();
-  const dagJson = JSON.stringify({ nodes, edges });
+async function createFullDag({ taskId, initiatorId, intent, priority = 0, nodes, edges = [] }) {
+  return withRetry((db) => {
+    const dagJson = JSON.stringify({ nodes, edges });
 
-  const txn = db.transaction(() => {
-    // 1. 创建 Task
-    db.prepare(`
-      INSERT INTO tasks (task_id, initiator_id, intent, priority, dag_json)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(taskId, initiatorId, intent, priority, dagJson);
+    const txn = db.transaction(() => {
+      // 1. 创建 Task
+      db.prepare(`
+        INSERT INTO tasks (task_id, initiator_id, intent, priority, dag_json)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(taskId, initiatorId, intent, priority, dagJson);
 
-    // 2. 批量创建 Nodes
-    const stmtNode = db.prepare(`
-      INSERT INTO dag_nodes (node_id, task_id, agent_id, description, depth, max_retries)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    for (const n of nodes) {
-      stmtNode.run(n.node_id, taskId, n.agent_id, n.description, n.depth ?? 0, n.max_retries ?? 3);
-    }
+      // 2. 批量创建 Nodes
+      const stmtNode = db.prepare(`
+        INSERT INTO dag_nodes (node_id, task_id, agent_id, description, depth, max_retries)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      for (const n of nodes) {
+        stmtNode.run(n.node_id, taskId, n.agent_id, n.description, n.depth ?? 0, n.max_retries ?? 3);
+      }
 
-    // 3. 批量创建 Edges
-    const stmtEdge = db.prepare(`
-      INSERT OR IGNORE INTO dag_edges (task_id, from_node, to_node)
-      VALUES (?, ?, ?)
-    `);
-    for (const e of edges) {
-      stmtEdge.run(taskId, e.from, e.to);
-    }
+      // 3. 批量创建 Edges
+      const stmtEdge = db.prepare(`
+        INSERT OR IGNORE INTO dag_edges (task_id, from_node, to_node)
+        VALUES (?, ?, ?)
+      `);
+      for (const e of edges) {
+        stmtEdge.run(taskId, e.from, e.to);
+      }
 
-    // 4. 审计日志
-    db.prepare(`
-      INSERT INTO audit_logs (task_id, node_id, agent_id, action, detail)
-      VALUES (?, NULL, ?, 'DAG_CREATED', ?)
-    `).run(taskId, initiatorId, JSON.stringify({ node_count: nodes.length, edge_count: edges.length }));
+      // 4. 审计日志
+      db.prepare(`
+        INSERT INTO audit_logs (task_id, node_id, agent_id, action, detail)
+        VALUES (?, NULL, ?, 'DAG_CREATED', ?)
+      `).run(taskId, initiatorId, JSON.stringify({ node_count: nodes.length, edge_count: edges.length }));
+    });
+
+    // 执行事务（原子化：任何一步失败全部回滚）
+    txn();
+    return { taskId, nodesCreated: nodes.length, edgesCreated: edges.length };
   });
-
-  // 执行事务（原子化：任何一步失败全部回滚）
-  txn();
-  return { taskId, nodesCreated: nodes.length, edgesCreated: edges.length };
 }
 
 // ═══════════════════════════════════════════════════════════════

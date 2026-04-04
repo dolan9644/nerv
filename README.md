@@ -1,3 +1,5 @@
+<div align="center">
+
 ```
  ███╗   ██╗ ███████╗ ██████╗  ██╗   ██╗
  ████╗  ██║ ██╔════╝ ██╔══██╗ ██║   ██║
@@ -6,6 +8,8 @@
  ██║ ╚████║ ███████╗ ██║  ██║  ╚████╔╝
  ╚═╝  ╚═══╝ ╚══════╝ ╚═╝  ╚═╝   ╚═══╝
 ```
+
+</div>
 
 > **西历 1995 年 10 月 4 日——**
 > 第壱話「使徒、襲来」。
@@ -394,6 +398,8 @@ openclaw restart
 安装脚本自动完成：
 - ✅ 注册 15 个 NERV Agent 到 `openclaw.json`
 - ✅ 初始化 `nerv.db`（SQLite WAL 模式 + 种子 Skill）
+- ✅ **Schema 自动迁移**——旧版数据库自动补齐新列（`ALTER TABLE`）
+- ✅ **注册 4 个 Cron Job**（Spear 巡检 / SEELE 安全 / Rei 提纯 / Adam 通知）
 - ✅ 配置 Lilith 每日备份
 - ✅ 备份你的原始 `openclaw.json`（可一键恢复）
 - ✅ 不影响你现有的任何 Agent
@@ -513,7 +519,7 @@ Heartbeat 只做**兜底容灾**：
 每个 Agent 在物理层面完全隔离：
 - 独立 workspace · 独立 SOUL.md · 独立 session 上下文
 - 通信只通过 `sessions_send`，消息即时化
-- misato 零记忆原则：调度决策只从 nerv.db 冷读取
+- misato **无状态上下文注入**：Session 每次清空，但启动时读取 `MEMORY.md` + 最近 3 天 `memory/` 作为战术简报
 - 作战层 Agent 是一次性电池：完成即销毁，不污染上下文
 
 这不是 metaphor，这是真正的 A.T.Field——**绝对领域的隔离边界**。
@@ -525,7 +531,9 @@ Heartbeat 只做**兜底容灾**：
 NERV 的长期记忆系统：
 - rei（绫波零）守护的知识库
 - 任务完成后自动沉淀关键信息到 `memory_queue/`
+- **物理后置记忆注入**：当 DAG 节点从 FAILED → 重试 → DONE（治愈），`db.js` 自动提取 `{ 原始错误, 重试次数, 修复结果 }` 写入 `memory_queue/healed_*.json`——用系统机制代替 LLM 的主观意愿
 - 凌晨 Cron 提纯：去重 → Embedding → 写入向量库
+- **无状态执行 + 有状态上下文注入 (SSCI)**：Misato 每次唤醒依然 `sessions.clear`，但启动时读取 Rei 提纯的 `MEMORY.md` 作为战术简报——兼顾可靠性与上下文感知
 - 下次同类任务时，rei 主动注入历史上下文
 - 损坏文件隔离：JSON 异常 → `corrupted/` + SECURITY_ALERT（不无限重试）
 - Skill GC：`discovered` 类工具 30 天未用自动清理（`native` 类永不自动删除）
@@ -573,4 +581,3 @@ MIT
 > *「逃げちゃダメだ、逃げちゃダメだ、逃げちゃダメだ……」*
 >
 > *——碇真嗣，西历 2015 年*
-]]>
