@@ -1,7 +1,11 @@
 # ═══ NERV .gitignore ═══
 
 # 数据库（含运行时状态，不应同步）
-data/
+# 保留 data/db/ 目录结构（.gitkeep），忽略实际 DB 文件
+data/**
+!data/
+!data/db/
+!data/db/.gitkeep
 *.db
 *.db-shm
 *.db-wal

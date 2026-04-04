@@ -22,8 +22,8 @@ log "备份 openclaw.json"
 cp "${OC_CONFIG}" "${OC_CONFIG_BAK}"
 
 log "初始化 nerv.db"
-mkdir -p "${NERV_ROOT}/data"
-command -v sqlite3 &>/dev/null && sqlite3 "${NERV_ROOT}/data/nerv.db" < "${NERV_ROOT}/scripts/init_db.sql"
+mkdir -p "${NERV_ROOT}/data/db"
+command -v sqlite3 &>/dev/null && sqlite3 "${NERV_ROOT}/data/db/nerv.db" < "${NERV_ROOT}/scripts/init_db.sql"
 
 log "注入 Agent 配置..."
 node << 'EOF'
@@ -66,17 +66,39 @@ log "配置备份脚本..."
 mkdir -p "${NERV_ROOT}/data/backups"
 cat > "${NERV_ROOT}/scripts/lilith_backup.sh" << 'BK'
 #!/usr/bin/env bash
-DB="${HOME}/.openclaw/nerv/data/nerv.db"
+DB="${HOME}/.openclaw/nerv/data/db/nerv.db"
 DIR="${HOME}/.openclaw/nerv/data/backups"
 D=$(date +%Y%m%d)
+mkdir -p "$DIR"
 [ -f "$DB" ] && cp "$DB" "$DIR/nerv_$D.db" && find "$DIR" -name "nerv_*.db" -mtime +7 -delete
 BK
 chmod +x "${NERV_ROOT}/scripts/lilith_backup.sh"
 
+log "注册 NERV Cron Jobs..."
+node << 'CRON_EOF'
+const fs=require('fs'),path=require('path');
+const CRON_FILE=path.join(process.env.HOME,'.openclaw','cron','jobs.json');
+let data={jobs:[]};
+try{data=JSON.parse(fs.readFileSync(CRON_FILE,'utf-8'));}catch(e){}
+if(!data.jobs)data.jobs=[];
+
+const NERV_CRON_IDS=['nerv-spear-sync','nerv-security-probe','nerv-memory-purify'];
+data.jobs=data.jobs.filter(j=>!NERV_CRON_IDS.includes(j.id));
+
+data.jobs.push(
+  {id:'nerv-spear-sync',agentId:'nerv-misato',name:'NERV · Spear 状态对齐',description:'每 5 分钟执行 DAG 孤儿节点检测 + 漏调度回收 + 环路熔断',enabled:true,schedule:{kind:'cron',expr:'*/5 * * * *',tz:'Asia/Shanghai'},sessionTarget:'isolated',wakeMode:'now',payload:{kind:'agentTurn',message:'静默执行 Spear 状态对齐。执行: node ~/.openclaw/nerv/scripts/spear_sync.js。读取 JSON 输出。如果 orphans/missedDispatches/circuitBreaks 任一非空，对每个异常节点执行 sessions_send 通知对应 Agent 重新认领。如果全部为空，回复 HEARTBEAT_OK。执行结束后 MUST 立即 sessions.clear 销毁全部上下文。',timeoutSeconds:120},delivery:{mode:'none'}},
+  {id:'nerv-security-probe',agentId:'nerv-seele',name:'NERV · SEELE 安全巡检',description:'每 30 分钟执行安全探针，检测未授权执行与路径越界',enabled:true,schedule:{kind:'cron',expr:'*/30 * * * *',tz:'Asia/Shanghai'},sessionTarget:'isolated',wakeMode:'now',payload:{kind:'agentTurn',message:'静默执行安全巡检。执行: node ~/.openclaw/nerv/scripts/security_probe.js --window 30。读取 JSON 输出。如果 anomalies 数组为空，回复 HEARTBEAT_OK。如果有异常：按 severity 严重程度，对 CRITICAL 级别的立即用 write 工具写入 sandbox_io/seele_alert_<timestamp>.json 并 sessions_send 通知 misato；对 HIGH 级别的写入审计日志。执行结束后 MUST 立即 sessions.clear。',timeoutSeconds:120},delivery:{mode:'none'}},
+  {id:'nerv-memory-purify',agentId:'nerv-rei',name:'NERV · REI 记忆提纯',description:'每天凌晨 3:00 执行 memory_queue 分页消费与提纯',enabled:true,schedule:{kind:'cron',expr:'0 3 * * *',tz:'Asia/Shanghai'},sessionTarget:'isolated',wakeMode:'now',payload:{kind:'agentTurn',message:'静默执行记忆提纯。执行: node ~/.openclaw/nerv/scripts/memory_purify.js --batch-size 100。读取控制台输出的统计数据。如果 total_processed > 0，将统计摘要写入 memory_queue/purify_report_<date>.md。执行结束后 MUST 立即 sessions.clear。',timeoutSeconds:600},delivery:{mode:'none'}}
+);
+
+fs.writeFileSync(CRON_FILE,JSON.stringify(data,null,2));
+console.log('Done: 3 NERV cron jobs registered');
+CRON_EOF
+
 cat > "${NERV_MARKER}" << MK
-{"installed_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","version":"6.0","agents":15,"backup":"${OC_CONFIG_BAK}"}
+{"installed_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","version":"6.1","agents":15,"cron_jobs":4,"backup":"${OC_CONFIG_BAK}"}
 MK
 
 echo ""
-log "✅ NERV v6 安装完成（15 Agent + A2A + visibility）"
+log "✅ NERV v6.1 安装完成（15 Agent + A2A + 4 Cron Jobs）"
 log "下一步: openclaw gateway restart"

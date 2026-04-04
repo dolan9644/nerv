@@ -21,6 +21,15 @@ import sys
 import sqlite3
 import urllib.request
 from datetime import datetime
+from pathlib import Path
+
+# 加载 .env（与 feishu_gateway.py 对齐）
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parent.parent / ".env"
+    load_dotenv(env_path)
+except ImportError:
+    pass  # 降级到系统环境变量
 
 # ═══════════════════════════════════════════════════════════════
 # 配置

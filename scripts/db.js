@@ -68,9 +68,78 @@ function getDb() {
         }
       });
       initTransaction();
+
+      // ═══ Schema 自动迁移 ═══
+      // CREATE TABLE IF NOT EXISTS 不会给已存在的表补列。
+      // 当 init_db.sql 新增列后，旧数据库的表结构会落后。
+      // 此处自动对齐：解析 init_db.sql 中的列定义，与实际表对比，补缺。
+      migrateSchema(_db, initSql);
     }
   }
   return _db;
+}
+
+/**
+ * Schema 自动迁移器
+ * 解析 init_db.sql 中的 CREATE TABLE 语句，提取列定义，
+ * 与数据库实际列对比，缺失列自动 ALTER TABLE ADD COLUMN。
+ * 确保任何版本的旧数据库升级后都能开箱即用。
+ */
+function migrateSchema(db, initSql) {
+  // 正则提取所有 CREATE TABLE 块
+  const tableRegex = /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)\s*\(([\s\S]*?)\)\s*;/gi;
+  let match;
+  let totalMigrated = 0;
+
+  while ((match = tableRegex.exec(initSql)) !== null) {
+    const tableName = match[1];
+    const body = match[2];
+
+    // 获取数据库中该表的实际列名
+    const existingCols = new Set(
+      db.prepare(`PRAGMA table_info(${tableName})`).all().map(r => r.name)
+    );
+
+    if (existingCols.size === 0) continue; // 表不存在（CREATE TABLE 会处理）
+
+    // 解析 SQL 中定义的列（排除 FOREIGN KEY / UNIQUE / CHECK 等约束行）
+    const lines = body.split(',').map(l => l.trim());
+    for (const line of lines) {
+      // 跳过约束声明
+      if (/^\s*(FOREIGN\s+KEY|UNIQUE|CHECK|PRIMARY\s+KEY\s*\()/i.test(line)) continue;
+
+      // 提取列名和类型+默认值
+      const colMatch = line.match(/^(\w+)\s+([\s\S]+)$/);
+      if (!colMatch) continue;
+
+      const colName = colMatch[1];
+      if (existingCols.has(colName)) continue; // 已存在，跳过
+
+      // 构建 ALTER TABLE 语句
+      // 清理列定义：移除行内注释 (-- xxx)
+      let colDef = colMatch[2].replace(/--.*$/, '').trim();
+      // 移除 NOT NULL（ALTER TABLE ADD COLUMN 不支持对已有行强制 NOT NULL，除非有 DEFAULT）
+      // 但如果有 DEFAULT，保留 NOT NULL 是安全的
+      if (/NOT\s+NULL/i.test(colDef) && !/DEFAULT/i.test(colDef)) {
+        colDef = colDef.replace(/NOT\s+NULL/i, '').trim();
+      }
+
+      try {
+        db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${colName} ${colDef};`);
+        console.log(`[NERV·DB] Schema 迁移: ${tableName}.${colName} 列已自动补充`);
+        totalMigrated++;
+      } catch (err) {
+        // 列已存在或其他幂等错误
+        if (!err.message.includes('duplicate column')) {
+          console.error(`[NERV·DB] Schema 迁移失败 ${tableName}.${colName}: ${err.message}`);
+        }
+      }
+    }
+  }
+
+  if (totalMigrated > 0) {
+    console.log(`[NERV·DB] Schema 迁移完成: 共补充 ${totalMigrated} 列`);
+  }
 }
 
 function closeDb() {

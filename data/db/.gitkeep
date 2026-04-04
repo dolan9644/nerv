@@ -1,0 +1,2 @@
+# This file ensures the data/db/ directory exists after git clone.
+# nerv.db will be auto-created here by install.sh or db.js on first run.
