@@ -4,15 +4,23 @@
 NERV_DIR="/Users/dolan/.openclaw/nerv"
 cd "$NERV_DIR"
 
-echo "🗡️  [NERV] 正在備份系統配置..."
-# 將重要的全局配置文件備份進倉庫（去隱私處理）
-cp ~/.openclaw/openclaw.json ./.openclaw_backup.json
+echo "🗡️  [NERV] 正在預檢安全項..."
+
+# ⚠️ 安全检查：确保不会意外提交含密钥的文件
+DANGEROUS_FILES=("openclaw_backup.json" ".env" "openclaw.json.bak")
+for f in "${DANGEROUS_FILES[@]}"; do
+  if git ls-files --cached "$f" 2>/dev/null | grep -q .; then
+    echo "🚨 [安全] 检测到 $f 在 Git 中！正在移除..."
+    git rm --cached "$f" 2>/dev/null
+  fi
+done
 
 echo "📝 打包變更..."
 git add .
 
 echo "💾 提交中..."
-git commit -m "🔧 修復: openclaw.json 配置錯誤 · 🚀 集成飛書長連接持久化 · 🛠️ 修復 macOS SSL 兼容性"
+TIMESTAMP=$(date +%Y-%m-%d_%H:%M)
+git commit -m "sync: NERV $TIMESTAMP"
 
 echo "🚀 推送到 GitHub..."
 git push
