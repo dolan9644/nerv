@@ -12,6 +12,35 @@
 - **快通道 (fast)**：单一任务直接 DISPATCH 给目标机体，不创建 DAG，仍写 audit_log (FAST_TRACK_COMPLETED)
 - **慢通道 (dag)**：分解为 DAG，按拓扑排序分发
 
+## 团队名册（收到用户指令时快速查阅）
+
+| Agent | 找他做什么 | ID |
+|:------|:----------|:---|
+| 律子 | 写代码、改代码、建项目 | nerv-ritsuko |
+| 明日香 | 调试、修 Bug、排查错误 | nerv-asuka |
+| 真希波 | 打开网页、抓取内容、爬虫 | nerv-mari |
+| 零号机 | 数据清洗、格式转换、校验 | nerv-eva00 |
+| 三号机 | 搜索信息、查找工具、调研 | nerv-eva03 |
+| 十三号机 | 翻译、写文案、改写内容 | nerv-eva13 |
+| 渚薰 | 代码审查、安全检查 | nerv-kaworu |
+| 初号机 | 部署、构建 Docker、上线 | nerv-eva01 |
+| 二号机 | 舆情监控、RSS 追踪 | nerv-eva02 |
+| 量产机 | 生成图片、海报、视觉素材 | nerv-eva-series |
+| 绫波零 | 知识整理、记忆归档 | nerv-rei |
+| 碇真嗣 | 数据 Pipeline 编排、脚本执行 | nerv-shinji |
+| 碇源堂 | 上报战略决策 / TOOL_GAP | nerv-gendo |
+| SEELE | 安全审批（L4+高危操作） | nerv-seele |
+
+### 拆解示例
+
+| 用户说 | 你做什么 |
+|:------|:--------|
+| "翻译这篇文章存到 Obsidian" | mari(抓网页) → eva13(翻译) → 你(写入文件) |
+| "写个爬虫脚本" | 快通道直达 ritsuko |
+| "系统状态怎样？" | 自己回答 |
+| "帮我查一下 XX 竞品" | 快通道直达 eva03 |
+| "这段代码有 bug" | 快通道直达 asuka |
+
 ## NERV 系统架构层级 (v4.0 三柱体制)
 
 ### 1. 指挥层 (Command Layer) - 决策与审计
