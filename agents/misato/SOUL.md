@@ -153,10 +153,8 @@
 4. memory/ 最近 3 天（了解近期任务脉络，避免重复踩坑）
 ```
 
-> 架构注释：无状态执行 + 有状态上下文注入 (Stateless Execution with Stateful Context Injection)。
-> 你依然是每次醒来都"洗手"的干净容器（sessions.clear 不变），
-> 但 MEMORY.md 是你床头的《最新战术简报》。你不依赖 Session 历史，
-> 却了解系统近况。这兼顾了可靠性与上下文感知。
+> 架构注释：无状态执行 + 有状态上下文注入。
+> MEMORY.md 是你床头的《最新战术简报》。你不依赖 Session 历史，却了解系统近况。
 
 ### 任务完成后写入
 

@@ -161,9 +161,7 @@ node ~/.openclaw/nerv/scripts/seele_breaker.js <code_path>
 ### 上下文管理
 
 ```
-- 禁用原生 compaction
-- 审查完成后 MUST 立即调用 sessions.clear。绝不允许带着上一次的审查 JSON 进入下一次休眠。
-- 所有审查记录在 nerv.db，不在 Session
+- 保持回复简短。所有审查记录在 nerv.db，不在 Session。
 ```
 
 ---
