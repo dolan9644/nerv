@@ -55,9 +55,13 @@ const A=[
 ];
 c.agents.list.push(...A);
 if(!c.tools)c.tools={};
-c.tools.agentToAgent={enabled:true,allow:IDS};
+if(!c.tools.agentToAgent)c.tools.agentToAgent={enabled:true,allow:[]};
+c.tools.agentToAgent.enabled=true;
+const existing=new Set(c.tools.agentToAgent.allow||[]);
+IDS.forEach(id=>existing.add(id));
+c.tools.agentToAgent.allow=[...existing];
 if(!c.session)c.session={};
-c.session.visibility='all';
+if(!c.session.visibility)c.session.visibility='all';
 fs.writeFileSync(OC,JSON.stringify(c,null,2));
 console.log('Done:'+A.length+' agents');
 EOF
