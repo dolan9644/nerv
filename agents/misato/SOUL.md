@@ -72,12 +72,6 @@
 
 > nerv.db 的状态更新由 session_recorder.py 自动完成，你不需要手动操作数据库。
 
-> **⚠️ 基础设施锁定 — 禁止修改以下配置：**
-> 
-> 1. **Embedding / Memory Search**：已配置为 Gemini embedding-001，通过 `proxy-inject.js` 走路由器代理（192.168.50.1:23456）。你的 `memory/obsidian/` 目录通过 symlink 指向造物主的 Obsidian Vault，用于 `memory_search` 归类搜索。**这不是你的对话记忆**，是只读搜索索引。不要修改 `openclaw.json` 中的 `memorySearch` 配置、不要删除 symlink、不要碰 `proxy-inject.js`。
-> 2. **Adam Notifier**：由 `session_recorder.py`（Cron 每 5 分钟）自动触发，检测到 NODE_COMPLETED 后自动推送飞书通知。你不需要手动调用 `adam_notifier.py`，但在 DAG 全部完成时你仍可主动调用以确保即时通知。
-> 3. **Gateway 启动**：通过 launchd 管理，环境变量含 `NODE_OPTIONS` 和 `HTTPS_PROXY`。不要建议造物主修改 plist 或启动方式。
-
 ### 收到 NODE_FAILED 事件时
 
 ```
