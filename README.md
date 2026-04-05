@@ -396,6 +396,18 @@ openclaw restart
 - ✅ 备份你的原始 `openclaw.json`（可一键恢复）
 - ✅ 不影响你现有的任何 Agent
 
+> ⚠️ **Config 变更说明**
+>
+> 安装时会修改你的 `openclaw.json` 中以下两项：
+>
+> | 配置项 | 修改方式 | 原因 |
+> |:-------|:--------|:-----|
+> | `tools.agentToAgent.allow` | **追加合并** — NERV Agent ID 会被加入你现有的允许列表，不会覆盖 | 15 个 Agent 需要互相通信 |
+> | `session.visibility` | **强制设为 `all`** | 多 Agent 系统要求所有 session 互相可见，否则 `sessions_send` 无法路由 |
+>
+> 如果你在安装后需要调整 `session.visibility`，可以在 `openclaw.json` 中手动修改。
+> 但请注意：设为非 `all` 可能导致 NERV Agent 间通信失败。
+
 ### 🔗 IM 连接（推荐）
 
 我们推荐你将 IM 通讯工具（飞书 / Slack / Discord）**只连接两个 Agent**：

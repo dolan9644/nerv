@@ -61,7 +61,7 @@ const existing=new Set(c.tools.agentToAgent.allow||[]);
 IDS.forEach(id=>existing.add(id));
 c.tools.agentToAgent.allow=[...existing];
 if(!c.session)c.session={};
-if(!c.session.visibility)c.session.visibility='all';
+c.session.visibility='all';
 fs.writeFileSync(OC,JSON.stringify(c,null,2));
 console.log('Done:'+A.length+' agents');
 EOF
