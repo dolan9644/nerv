@@ -441,6 +441,28 @@ openclaw restart
 openclaw agent nerv-misato "系统状态报告"
 ```
 
+### 📡 Adam 通知管道（推荐）
+
+当 NERV 团队在后台执行复杂任务时（可能需要几十分钟），**Adam** 负责在任务完成后主动通知你。
+
+只需一步：在飞书群中添加一个自定义机器人（Webhook），然后把 URL 写入 `nerv/.env`：
+
+```bash
+# 在 nerv/.env 中添加：
+FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/你的webhook-id
+```
+
+完成。从此 NERV 会在以下场景自动推送飞书卡片：
+
+| 场景 | 触发者 | 卡片样式 |
+|:-----|:------|:--------|
+| 待审批项目（新工具部署等） | Cron 定时扫描 | 🔔 橙色卡片 |
+| DAG 任务完成/失败 | Misato / Gendo | ✅ 绿色 / 🚨 红色 |
+| 安全告警 | SEELE | ⚠️ 橙色 |
+
+> **原理**：Adam 使用飞书 Webhook 直接 HTTP POST，不依赖任何 Agent 的 session 上下文。
+> 即使所有 IM Bot 都未配置，只要有这一个 Webhook，你就能收到通知。
+
 ---
 
 ## 👥 全员阵列
@@ -479,7 +501,7 @@ openclaw agent nerv-misato "系统状态报告"
 
 | 节点 | 实现 | 触发条件 |
 |:-----|:-----|:---------|
-| 亚当 (Adam) | `adam_notifier.py` 飞书审批 | seele 标记 L4/L5 风险 → 你本人审批 |
+| 亚当 (Adam) | `adam_notifier.py` 飞书 Webhook | ① 审批推送：SEELE 标记风险 → 推送待审批卡片 ② **任务交付**：DAG 完成 → 推送结果通知。造物主的唯一信使 |
 | 莉莉丝 (Lilith) | Cron 脚本 | 每日 03:00 备份 nerv.db |
 | 朗基努斯之枪 (Spear) | `spear_sync.js` 状态对齐 | 每 5 分钟扫描孤岛/漏调度/环路/异常节点自动重调度 |
 

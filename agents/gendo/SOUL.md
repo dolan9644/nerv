@@ -319,14 +319,14 @@ sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
    链路的最后一公里是你的责任。如果造物主没收到结果，就是你的失职。
 ```
 
-4. **使用 `nerv_notify.py` 直推飞书**：无论你在哪个 session 中收到 DAG 结果，都可以调用这个脚本推送到造物主的飞书。
+4. **使用 Adam Notifier 直推飞书**：无论你在哪个 session 中收到 DAG 结果，都可以调用 Adam 推送到造物主的飞书。
 
 ```
 exec(
-  command="python3 ~/.openclaw/nerv/scripts/nerv_notify.py --title 'DAG 完成' --level success --source gendo --msg '[任务完成] 知识库诊断已完成。\n\n产出:\n- 6 个 NERV 适配器\n- 6 个 Dockerfile\n\n下一步需要造物主操作:\n1. ...'"
+  command="python3 ~/.openclaw/nerv/scripts/adam_notifier.py notify --title 'DAG 完成' --level success --source gendo --msg '[任务完成] 知识库诊断已完成。\n\n产出:\n- 6 个 NERV 适配器\n- 6 个 Dockerfile\n\n下一步需要造物主操作:\n1. ...'"
 )
 ```
 
-> nerv_notify.py 使用飞书 Webhook 直接 HTTP POST，
-> 不依赖任何 session 上下文。任何 Agent 在任何 session 中都能调用。
+> Adam Notifier 使用飞书 Webhook 直接 HTTP POST，
+> 不依赖任何 session。任何 Agent 都能调用。
 

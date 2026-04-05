@@ -2,42 +2,68 @@
 """
 ███ NERV · Adam 通知器 · adam_notifier.py ███
 
-Cron 每 10 分钟扫一次 pending_approvals 表。
-发现 PENDING 状态的新记录 → 推送飞书卡片到造物主。
+NERV 与造物主之间的唯一信使。
+通过飞书 Webhook 向造物主推送通知，不依赖任何 Agent Session。
 
-用法:
-  python3 scripts/adam_notifier.py                    # 正常运行
-  python3 scripts/adam_notifier.py --dry-run           # 只检查不推送
+═══ 两种工作模式 ═══
 
-环境变量:
-  FEISHU_WEBHOOK_URL — 飞书群组机器人 Webhook 地址
+模式 A — 审批推送（Cron 定时触发）:
+  python3 scripts/adam_notifier.py scan                # 扫描 pending_approvals 并推送
+  python3 scripts/adam_notifier.py scan --dry-run      # 只检查不推送
 
-Cron 配置 (nerv_cron_jobs.js):
-  */10 * * * * python3 ~/.openclaw/nerv/scripts/adam_notifier.py
+模式 B — 通用推送（任何 Agent 通过 exec 调用）:
+  python3 scripts/adam_notifier.py notify --title "DAG 完成" --msg "详细内容..."
+  python3 scripts/adam_notifier.py notify --title "任务完成" --msg "..." --level success --source misato
+  python3 scripts/adam_notifier.py notify --json '{"title":"xxx","body":"yyy"}'
+
+级别 (--level): info(蓝) | success(绿) | warning(橙) | error(红)
+
+═══ 环境变量 ═══
+
+  FEISHU_WEBHOOK_URL — 飞书群组机器人 Webhook 地址（从 nerv/.env 自动加载）
+
+═══ 部署 ═══
+
+  1. 在飞书群中添加一个自定义机器人，获取 Webhook URL
+  2. 写入 nerv/.env:  FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxx
+  3. 完成。所有 NERV Agent 的通知都会推到这个群。
 """
 import json
 import os
 import sys
 import sqlite3
 import urllib.request
+import argparse
 from datetime import datetime
 from pathlib import Path
 
-# 加载 .env（与 feishu_gateway.py 对齐）
-try:
-    from dotenv import load_dotenv
-    env_path = Path(__file__).parent.parent / ".env"
-    load_dotenv(env_path)
-except ImportError:
-    pass  # 降级到系统环境变量
+# ═══════════════════════════════════════════════════════════════
+# 环境加载
+# ═══════════════════════════════════════════════════════════════
+
+# 自动加载 nerv/.env
+_env_path = Path(__file__).parent.parent / ".env"
+if _env_path.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_path)
+    except ImportError:
+        # 手动解析
+        with open(_env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, val = line.split('=', 1)
+                    os.environ.setdefault(key.strip(), val.strip())
 
 # ═══════════════════════════════════════════════════════════════
 # 配置
 # ═══════════════════════════════════════════════════════════════
 
 NERV_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FEISHU_WEBHOOK = os.environ.get('FEISHU_WEBHOOK_URL', '')
 
-# 统一 DB 路径：优先环境变量，与其他物理脚本对齐
+# DB 路径（仅 scan 模式需要）
 DB_PATH = os.environ.get('NERV_DB_PATH')
 if not DB_PATH:
     for candidate in [
@@ -49,13 +75,45 @@ if not DB_PATH:
             DB_PATH = candidate
             break
     else:
-        DB_PATH = os.path.join(NERV_ROOT, 'data', 'db', 'nerv.db')  # fallback
+        DB_PATH = os.path.join(NERV_ROOT, 'data', 'db', 'nerv.db')
 
-FEISHU_WEBHOOK = os.environ.get('FEISHU_WEBHOOK_URL', '')
-DRY_RUN = '--dry-run' in sys.argv
-
-# 记录上次通知的 ID，避免重复推送
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.adam_last_notified_id')
+
+# ═══════════════════════════════════════════════════════════════
+# 飞书推送（共用）
+# ═══════════════════════════════════════════════════════════════
+
+LEVEL_COLORS = {'info': 'blue', 'success': 'green', 'warning': 'orange', 'error': 'red'}
+LEVEL_ICONS  = {'info': 'ℹ️', 'success': '✅', 'warning': '⚠️', 'error': '🚨'}
+
+def send_feishu(card):
+    """推送卡片到飞书 Webhook"""
+    if not FEISHU_WEBHOOK:
+        print(json.dumps({"status": "error", "msg": "未配置 FEISHU_WEBHOOK_URL"}))
+        return False
+
+    data = json.dumps(card).encode('utf-8')
+    req = urllib.request.Request(
+        FEISHU_WEBHOOK,
+        data=data,
+        headers={'Content-Type': 'application/json'}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+            ok = result.get('code', -1) == 0
+            if ok:
+                print(json.dumps({"status": "ok", "msg": "推送成功"}))
+            else:
+                print(json.dumps({"status": "error", "msg": f"飞书返回: {result}"}))
+            return ok
+    except Exception as e:
+        print(json.dumps({"status": "error", "msg": str(e)}))
+        return False
+
+# ═══════════════════════════════════════════════════════════════
+# 模式 A：审批推送（scan）
+# ═══════════════════════════════════════════════════════════════
 
 def get_last_notified_id():
     try:
@@ -71,11 +129,8 @@ def save_last_notified_id(max_id):
         f.write(str(max_id))
 
 def get_pending_approvals(min_id=0):
-    """查询 pending_approvals 中 status=PENDING 且 id > min_id 的记录"""
     if not os.path.exists(DB_PATH):
-        print(f"[Adam] 数据库不存在: {DB_PATH}")
         return []
-
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
@@ -84,16 +139,14 @@ def get_pending_approvals(min_id=0):
             ('PENDING', min_id)
         ).fetchall()
         return [dict(r) for r in rows]
-    except sqlite3.OperationalError as e:
-        print(f"[Adam] 查询失败: {e}")
+    except sqlite3.OperationalError:
         return []
     finally:
         conn.close()
 
-def build_feishu_card(approvals):
-    """构建飞书卡片消息"""
+def build_approval_card(approvals):
     items = []
-    for a in approvals[:5]:  # 最多展示 5 条
+    for a in approvals[:5]:
         payload = json.loads(a['payload']) if isinstance(a['payload'], str) else a['payload']
         created = datetime.fromtimestamp(a['created_at']).strftime('%m/%d %H:%M')
         items.append(f"• **#{a['id']}** [{a['approval_type']}] {payload.get('name', payload.get('skill_name', '未知'))} — {created}")
@@ -117,51 +170,116 @@ def build_feishu_card(approvals):
         }
     }
 
-def send_feishu(card):
-    """发送飞书 Webhook"""
-    if not FEISHU_WEBHOOK:
-        print("[Adam] 未配置 FEISHU_WEBHOOK_URL，跳过推送")
-        return False
-
-    data = json.dumps(card).encode('utf-8')
-    req = urllib.request.Request(
-        FEISHU_WEBHOOK,
-        data=data,
-        headers={'Content-Type': 'application/json'}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            result = json.loads(resp.read())
-            return result.get('code', -1) == 0
-    except Exception as e:
-        print(f"[Adam] 飞书推送失败: {e}")
-        return False
-
-def main():
+def cmd_scan(args):
+    """扫描 pending_approvals 并推送"""
     last_id = get_last_notified_id()
     approvals = get_pending_approvals(last_id)
 
     if not approvals:
-        print(f"[Adam] 无新待批复事项 (last_id={last_id})")
+        print(json.dumps({"status": "ok", "msg": f"无新待批复 (last_id={last_id})"}))
         return
 
-    print(f"[Adam] 发现 {len(approvals)} 条待批复")
-
-    if DRY_RUN:
-        print("[Adam] DRY-RUN 模式，不推送")
+    if args.dry_run:
         for a in approvals:
             print(f"  #{a['id']} [{a['approval_type']}] by {a['requested_by']}")
         return
 
-    card = build_feishu_card(approvals)
+    card = build_approval_card(approvals)
     success = send_feishu(card)
 
     if success:
         max_id = max(a['id'] for a in approvals)
         save_last_notified_id(max_id)
-        print(f"[Adam] 推送成功，已更新 last_id={max_id}")
-    else:
-        print("[Adam] 推送失败或未配置 Webhook")
 
-if __name__ == "__main__":
+# ═══════════════════════════════════════════════════════════════
+# 模式 B：通用推送（notify）
+# ═══════════════════════════════════════════════════════════════
+
+def build_notify_card(title, body, level='info', source=None):
+    color = LEVEL_COLORS.get(level, 'blue')
+    icon = LEVEL_ICONS.get(level, 'ℹ️')
+
+    elements = [{"tag": "markdown", "content": body}]
+    if source:
+        elements.append({"tag": "markdown", "content": f"---\n📡 来源: `{source}`"})
+
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "header": {
+                "title": {"tag": "plain_text", "content": f"{icon} NERV · {title}"},
+                "template": color
+            },
+            "elements": elements
+        }
+    }
+
+def cmd_notify(args):
+    """推送自定义通知"""
+    if args.json:
+        try:
+            data = json.loads(args.json)
+            title = data.get('title', 'NERV 通知')
+            body = data.get('body', data.get('msg', ''))
+            level = data.get('level', 'info')
+            source = data.get('source', None)
+        except json.JSONDecodeError as e:
+            print(json.dumps({"status": "error", "msg": f"JSON 解析失败: {e}"}))
+            sys.exit(1)
+    else:
+        title = args.title
+        body = args.msg
+        level = args.level
+        source = args.source
+
+    if not body:
+        print(json.dumps({"status": "error", "msg": "消息为空，使用 --msg 或 --json"}))
+        sys.exit(1)
+
+    card = build_notify_card(title, body, level, source)
+
+    if args.dry_run:
+        print(json.dumps(card, indent=2, ensure_ascii=False))
+        return
+
+    success = send_feishu(card)
+    sys.exit(0 if success else 1)
+
+# ═══════════════════════════════════════════════════════════════
+# CLI 入口
+# ═══════════════════════════════════════════════════════════════
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='NERV · Adam 通知器 — 造物主的唯一信使',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    sub = parser.add_subparsers(dest='command')
+
+    # scan 子命令
+    p_scan = sub.add_parser('scan', help='扫描 pending_approvals 并推送')
+    p_scan.add_argument('--dry-run', action='store_true')
+
+    # notify 子命令
+    p_notify = sub.add_parser('notify', help='推送自定义通知')
+    p_notify.add_argument('--title', default='NERV 通知', help='卡片标题')
+    p_notify.add_argument('--msg', default='', help='消息正文 (Markdown)')
+    p_notify.add_argument('--level', default='info', choices=['info', 'success', 'warning', 'error'])
+    p_notify.add_argument('--source', default=None, help='来源 Agent ID')
+    p_notify.add_argument('--json', default=None, help='JSON: {"title":"...","body":"..."}')
+    p_notify.add_argument('--dry-run', action='store_true')
+
+    args, remaining = parser.parse_known_args()
+
+    # 兼容旧调用方式（无子命令 = scan）
+    if not args.command:
+        args.dry_run = '--dry-run' in sys.argv
+        args.command = 'scan'
+
+    if args.command == 'scan':
+        cmd_scan(args)
+    elif args.command == 'notify':
+        cmd_notify(args)
+
+if __name__ == '__main__':
     main()
