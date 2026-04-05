@@ -1,7 +1,6 @@
 # ═══ NERV .gitignore ═══
 
-# 数据库（含运行时状态，不应同步）
-# 保留 data/db/ 目录结构（.gitkeep），忽略实际 DB 文件
+# ═══ 数据库（运行时状态）═══
 data/**
 !data/
 !data/db/
@@ -10,12 +9,39 @@ data/**
 *.db-shm
 *.db-wal
 
-# Node.js
+# ═══ Agent 运行时产出（绝对不上传）═══
+# DAG 任务产出（Agent 跑任务时生成的所有文件）
+agents/*/tasks/
+# Agent 收件箱（A2A 消息中转）
+agents/*/inbox/
+agents/shared/inbox/
+# Session 数据
+agents/*/sessions/
+agents/*/.openclaw/
+# 记忆 / 向量
+agents/*/memory/
+agents/*/memory_queue/
+**/memory_queue/
+# 沙箱 I/O
+agents/*/sandbox_io/
+sandbox_io/
+# 损坏文件隔离
+agents/*/corrupted/
+corrupted/
+
+# ═══ 脚本运行时产出 ═══
+# 状态文件（Adam Notifier 等）
+scripts/.*
+# 生成的报告（daily-report 等）
+scripts/*-report-*.md
+scripts/*-report-*.json
+
+# ═══ Node.js ═══
 node_modules/
 dist/
 .vite/
 
-# 环境变量 / 密钥 / 备份（含真实凭证）
+# ═══ 环境变量 / 密钥 / 备份 ═══
 .env
 .env.*
 !.env.example
@@ -27,26 +53,15 @@ openclaw.json.bak*
 openclaw.json.clobbered.*
 *.pre-nerv.bak
 
-# 系统文件
+# ═══ 系统文件 ═══
 .DS_Store
 Thumbs.db
 
-# 运行时
-sandbox_io/
-memory_queue/
-corrupted/
+# ═══ 日志 ═══
 *.log
-
-# Sessions / Memory（运行时状态，不应同步）
-agents/*/sessions/
-agents/*/.openclaw/
-agents/*/memory/
-**/memory_queue/
-
-# 虚拟环境
-.venv/
-.venv_nerv/
-
-# 飞书网关日志（已废弃，由 OpenClaw Gateway 内置接管）
 feishu_gateway.log
 gendo_gateway.log
+
+# ═══ 虚拟环境 ═══
+.venv/
+.venv_nerv/
