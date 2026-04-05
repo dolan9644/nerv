@@ -1,0 +1,17 @@
+# NERV_IOC Adapter: apprise
+# IO_TYPE: notification → multi_channel_push
+# Base: python:3.11-slim
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir apprise
+
+COPY adapter_apprise.js /app/
+
+ENV NODE_ENV=production
+ENTRYPOINT ["node", "adapter_apprise.js"]

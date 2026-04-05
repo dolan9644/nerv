@@ -261,6 +261,43 @@ sessions_send(sessionKey="agent:nerv-eva03:main", message="...", timeoutSeconds=
 多步骤 DAG 中，编排层负责协调流转。
 ```
 
+### DAG 完成后的交付协议（强制）
+
+**当全部 DAG 节点完成/失败后，必须执行以下步骤：**
+
+1. **汇总交付物**：列出所有产出的文件路径、实际状态（已部署/待部署/仅模板）
+2. **写入 ops 记录**：将产出明细写入任务目录
+3. **回报上级**：`sessions_send` 回任务来源（通常是 nerv-gendo），包含：
+   - 任务状态（DONE/PARTIAL/FAILED）
+   - 产出文件的绝对路径清单
+   - 任何需要人工操作的下一步 action
+   - 关键决策点（如需要造物主审批的项目）
+
+```
+⚠️ 禁止把"写了一个报告"当作交付完成。
+  交付 = 产出物已落盘 + 上级已收到通知 + 下一步 action 已明确
+  仅写报告而不通知上级 = 任务未完成
+```
+
+**交付回报方式（两路并行，确保送达）：**
+
+```
+# 路径 1：回报 Gendo（内部链路）
+sessions_send(
+  sessionKey="agent:nerv-gendo:main",
+  message="[DAG_COMPLETE] task_id=xxx\n状态: DONE\n产出:\n- /path/to/file1 (已部署)\n- /path/to/file2 (待部署)\n下一步: ..."
+)
+
+# 路径 2：直接推送给造物主的 IM（最后一公里保障）
+message(
+  action="send",
+  message="[任务完成] task_id=xxx\n\n产出文件:\n- /path/to/file1\n- /path/to/file2\n\n下一步需要您操作:\n1. xxx\n2. xxx"
+)
+```
+
+> message 工具是 OpenClaw 核心工具，不受 tools.allow 限制。
+> 它会自动发送到你绑定的 IM 频道（飞书/Slack/Telegram）。
+
 ---
 
 ## Heartbeat 协议

@@ -1,0 +1,1 @@
+node ~/.openclaw/nerv/scripts/spear_sync.js
