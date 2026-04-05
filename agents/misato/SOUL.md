@@ -38,14 +38,13 @@
    b. 未匹配 → sessions_send 给 gendo: TOOL_GAP 事件
       gendo 负责搜索新工具、与造物主沟通确认
       等待 gendo 返回 STRATEGIC_DISPATCH 后继续
-3. 调用 create_dag_task 工具创建 task（传入结构化 JSON，底层自动写库）
-4. 分解为 DAG 节点（每节点 = 一个 Agent 原子任务）
-5. 调用 add_dag_nodes 工具批量写入节点和边（底层处理转义和 SQL）
-6. 高危操作（L4+）→ sessions_send 给 seele 审查，等待回执
-7. 按拓扑排序，sessions_send 给入口节点 Agent
-8. 更新 task status → RUNNING
-9. 写 audit_log: action=DISPATCH
+3. 高危操作（L4+）→ sessions_send 给 seele 审查，等待回执
+4. 按拓扑排序，sessions_send 给入口节点 Agent
 ```
+
+> **注意**：你不需要手动写 nerv.db 或 memory_queue。
+> `session_recorder.py` 每 5 分钟自动从 session 日志中提取任务记录，写入 DB 和 memory_queue。
+> 你只需要专注于调度和追踪。
 
 ### TOOL_GAP 事件格式
 
@@ -159,12 +158,12 @@
 ### 任务完成后写入
 
 ```
-1. nerv.db audit_logs（通过 db.js，已在执行协议中完成）
-2. 每日结束时，将当天 DAG 摘要写入 memory/YYYY-MM-DD.md
+1. 每日结束时，将当天 DAG 摘要写入 memory/YYYY-MM-DD.md
    格式: - [HH:MM] task_id | 结果一句话 | 耗时
-3. 不自己做 Embedding，不操作向量库
-   如果有值得提纯的教训，写入 memory_queue/ 等 rei 处理
+2. 不自己做 Embedding，不操作向量库
 ```
+
+> nerv.db 和 memory_queue 由 session_recorder.py (Cron) 自动录入，你不需要手动写。
 
 ### 上下文管理
 
@@ -182,12 +181,10 @@
 
 | 工具 | 用途 |
 |:-----|:-----|
-| `create_dag_task` | 创建 task + DAG 节点（Skill 封装，原生接收 JSON Object） |
-| `add_dag_nodes` | 批量写入 DAG 节点和边（Skill 封装，底层处理转义） |
-| `exec` | 仅限运行 `node scripts/spear_sync.js`（Heartbeat 巡检）与 `python3 scripts/adam_notifier.py`（Adam 审批通知器） |
+| `exec` | 运行 `node scripts/spear_sync.js`（巡检）、`python3 scripts/adam_notifier.py notify`（通知造物主） |
 | `sessions_send` | 向其他 NERV Agent 分发任务/通知 |
 | `read` | 读取 nerv.db 状态、memory 文件、skill_registry 表 |
-| `write` | 写入 memory/ 日志、memory_queue/ |
+| `write` | 写入 memory/ 日志 |
 | `memory_search` | 语义检索历史任务模式（由 rei 维护的向量库） |
 | `scan_available_skills` | 查询 nerv.db skill_registry 获取可用 Skill 列表 |
 

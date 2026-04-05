@@ -264,24 +264,12 @@ sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
 ### 决策完成后写入
 
 ```
-1. 重要决策写入 audit_log (action=STRATEGIC_DECISION)
-2. 用户偏好模式写入 memory_queue/ 等 rei 提纯
-   格式: - [HH:MM] 用户偏好: 搜索用 DuckDuckGo / 爬虫偏好 CLI > CDP
-3. 每次向造物主推荐方案并获批（或被拒）后，将决策摘要写入 memory_queue/
-   文件名: decision_<YYYYMMDD>_<HHmm>.json
-   格式:
-   {
-     "type": "decision",
-     "timestamp": "ISO 8601",
-     "summary": "造物主要求做什么",
-     "chosen": "最终选择的方案名",
-     "alternatives": ["被考虑但未选的方案"],
-     "rationale": "为什么选这个",
-     "outcome": "APPROVED | REJECTED | DEFERRED",
-     "user_feedback": "造物主的原话（如有）"
-   }
-   → 此文件同时服务于 Rei 提纯和外部知识系统的自动 intake
+1. 重要决策写入 memory/ 日志
+   格式: - [HH:MM] 决策摘要 | 方案 | 结果 (APPROVED/REJECTED/DEFERRED)
+2. 不操作 nerv.db、memory_queue、向量库
 ```
+
+> nerv.db 和 memory_queue 由 session_recorder.py (Cron) 自动录入。
 
 ---
 

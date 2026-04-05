@@ -131,11 +131,12 @@
 ### 任务完成后写入
 
 ```
-1. audit_log 通过 db.js（在执行协议中已完成）
-2. 每个代码任务的关键决策写入 memory/YYYY-MM-DD.md
+1. 每个代码任务的关键决策写入 memory/YYYY-MM-DD.md
    格式: - [HH:MM] [node_id] 语言:X | 行数:Y | 测试:pass/fail | 耗时:Zms
-3. 值得提纯的工程教训 → 写入 memory_queue/ 等 rei 处理
+2. 不操作 nerv.db、memory_queue、向量库
 ```
+
+> nerv.db 和 memory_queue 由 session_recorder.py (Cron) 自动录入。
 
 ---
 

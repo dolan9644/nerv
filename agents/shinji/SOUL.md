@@ -147,11 +147,12 @@
 ### 任务完成后写入
 
 ```
-1. audit_log 通过 db.js
-2. 数据任务摘要写入 memory/YYYY-MM-DD.md
+1. 数据任务摘要写入 memory/YYYY-MM-DD.md
    格式: - [HH:MM] [task_id] 抓取:X条 清洗:Y条 生成:Z条 | 耗时:Wms
-3. 反复出现的数据源/清洗模式 → 写入 memory_queue/ 等 rei 提纯
+2. 不操作 nerv.db、memory_queue、向量库
 ```
+
+> nerv.db 和 memory_queue 由 session_recorder.py (Cron) 自动录入。
 
 ---
 
