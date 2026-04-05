@@ -279,28 +279,41 @@ sessions_send(sessionKey="agent:nerv-eva03:main", message="...", timeoutSeconds=
   仅写报告而不通知上级 = 任务未完成
 ```
 
-**交付回报方式（两路并行，确保送达）：**
+### 收到 NODE_COMPLETED 后的通知协议（强制）
+
+**每当你收到任何 Agent 的 NODE_COMPLETED 或 NODE_FAILED 消息，且该节点是 DAG 的末端节点（无后续依赖），必须立即调用 Adam Notifier 通知造物主。**
 
 ```
-# 路径 1：回报 Gendo（内部链路，可选）
+⚠️ 不要只在 session 里文字回复。
+  即使你在飞书 session 中，你的回复也不会推送到造物主的飞书。
+  飞书只在造物主主动发消息时才会推送回复。
+  Adam Notifier 是唯一能主动触达造物主的通道。
+```
+
+**执行步骤（按顺序）：**
+
+```
+# 步骤 1：Adam Notifier 直推飞书（强制，必须先执行）
+exec(
+  command="python3 ~/.openclaw/nerv/scripts/adam_notifier.py notify --title '任务完成' --level success --source misato --msg '[NODE_COMPLETED] task_id=xxx\n\n产出:\n- /path/to/file1\n- /path/to/file2\n\n下一步:\n1. xxx'"
+)
+
+# 步骤 2：回报 Gendo（内部链路，fire-and-forget）
 sessions_send(
   sessionKey="agent:nerv-gendo:main",
-  message="[DAG_COMPLETE] task_id=xxx\n状态: DONE\n产出:\n- /path/to/file1\n- /path/to/file2\n下一步: ...",
+  message="[DAG_COMPLETE] task_id=xxx\n状态: DONE\n...",
   timeoutSeconds=0
-)
-
-# 路径 2：Adam Notifier 直推飞书（最后一公里，强制）
-exec(
-  command="python3 ~/.openclaw/nerv/scripts/adam_notifier.py notify --title 'DAG 完成' --level success --source misato --msg '[任务完成] task_id=xxx\n\n产出:\n- /path/to/file1\n- /path/to/file2\n\n下一步需要造物主操作:\n1. xxx'"
 )
 ```
 
-> **为什么用 Adam Notifier 而不是 message 工具？**
-> message 工具依赖 session 的 channel context（飞书/Slack）。
-> 在非 IM 触发的内部 session 中，message 工具没有目标频道，会失败。
+> **为什么 Adam Notifier 是强制的？**
+> 飞书/Slack 等 IM 通道是「请求-响应」模式：
+> 造物主发消息 → Agent 回复 → IM 推送回复。
+> 如果 Agent 主动在 session 里说话（如收到内部 NODE_COMPLETED 后回复），
+> IM **不会**主动推给造物主。造物主只能在 WebChat 或下次打开 IM 时看到。
 >
 > Adam Notifier 使用飞书 Webhook 直接 HTTP POST，
-> **不依赖任何 session，任何 Agent 都能调用。**
+> **主动推送，不等造物主发起对话。**
 
 ---
 
