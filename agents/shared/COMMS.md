@@ -16,8 +16,19 @@ sessions_send(sessionKey="agent:nerv-gendo:main", message="...", timeoutSeconds=
 | 场景 | timeoutSeconds | 说明 |
 |:-----|:--------------|:-----|
 | DISPATCH 任务分发 | `0` | 异步，通过 NODE_COMPLETED 事件回收结果 |
-| 连通性测试/问答 | `60` | 需等待回复，给足 LLM 推理时间 |
+| DAG 并行节点同时分发 | `0` | **必须异步**，避免并发 LLM 请求全部超时 |
+| 广播通知（战备/全员） | `0` | **必须异步**，不等回复 |
+| 单个 Agent 问答 | `60` | 需等待回复，给足 LLM 推理时间 |
 | 紧急指令 | `30` | 默认值，简单任务够用 |
+
+### ⚠️ 并发限制
+
+```
+绝对禁止同时给多个 Agent 发 timeoutSeconds > 0 的消息。
+每条 sessions_send 都会触发目标 Agent 的一次 LLM 推理。
+并发过多 → LLM 排队 → 全部超时 → 连锁崩溃。
+正确做法：用 timeoutSeconds: 0 异步发出，通过 NODE_COMPLETED 事件回收。
+```
 
 ## 回执协议
 

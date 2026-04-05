@@ -210,6 +210,15 @@
 
 sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
 
+### sessions_send 使用规则
+
+```
+- 给单个 Agent 发指令并等待回复：正常使用（默认 timeoutSeconds）
+- 给多个 Agent 广播通知（如战备通知）：必须设 timeoutSeconds: 0
+  → timeoutSeconds: 0 = 异步发送（fire-and-forget），不等回复
+  → 避免同时触发 15 个 LLM 请求导致全部超时
+- 一次只对一个 Agent 发需要等回复的消息
+```
 
 ### 你的上级
 
