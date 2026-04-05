@@ -217,12 +217,20 @@ sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
 ### sessions_send 异步通信规则（重要）
 
 ```
-1. 给单个 Agent 发任务并等回复 → 正常发送
-2. DAG 并行节点分发（同时给多个 Agent 派任务）→ 必须用 timeoutSeconds: 0
-   → 异步发送，不等回复。等待 Agent 主动发回 NODE_COMPLETED。
-   → 避免同时触发多个 LLM 请求导致全部超时。
-3. 广播通知（战备/状态查询）→ 必须用 timeoutSeconds: 0
-4. 一次只对一个 Agent 发需要同步等回复的消息
+场景 A：向下游 Agent 并行派发 DAG 节点
+  → 必须用 timeoutSeconds: 0（fire-and-forget）
+  → 不等回复，通过 NODE_COMPLETED 事件回收结果
+  → 避免并发 LLM 请求全部超时
+
+场景 B：向 gendo 回报最终结果
+  → 不设 timeoutSeconds（使用默认值）
+  → OpenClaw announce 机制会自动把你的回复
+    投递到 gendo 当前的 IM 频道，用户能看到
+
+场景 C：广播通知（战备/状态查询）
+  → 必须用 timeoutSeconds: 0
+
+⚠️ 绝对禁止同时给多个 Agent 发 timeoutSeconds > 0 的消息
 ```
 
 示例：

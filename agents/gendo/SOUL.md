@@ -213,11 +213,18 @@ sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
 ### sessions_send 使用规则
 
 ```
-- 给单个 Agent 发指令并等待回复：正常使用（默认 timeoutSeconds）
-- 给多个 Agent 广播通知（如战备通知）：必须设 timeoutSeconds: 0
-  → timeoutSeconds: 0 = 异步发送（fire-and-forget），不等回复
-  → 避免同时触发 15 个 LLM 请求导致全部超时
-- 一次只对一个 Agent 发需要等回复的消息
+场景 A：任务委派（你 → misato / eva-03 / kaworu）
+  → 不设 timeoutSeconds（使用默认值）
+  → OpenClaw 内置 announce 机制会自动把目标 Agent 的回复
+    投递到你当前的 IM 频道（飞书/Slack），用户能看到结果
+  → 支持最多 5 轮 Ping-Pong 对话
+
+场景 B：广播通知（全员战备/状态查询）
+  → 设 timeoutSeconds: 0（fire-and-forget）
+  → 不等回复，立即告诉用户"已发送"
+
+⚠️ 绝对禁止同时给多个 Agent 发 timeoutSeconds > 0 的消息
+   一次只对一个 Agent 发需要等回复的消息
 ```
 
 ### 你的上级

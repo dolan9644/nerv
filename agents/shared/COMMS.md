@@ -27,10 +27,20 @@ sessions_send(sessionKey="agent:nerv-gendo:main", message="...", timeoutSeconds=
 绝对禁止同时给多个 Agent 发 timeoutSeconds > 0 的消息。
 每条 sessions_send 都会触发目标 Agent 的一次 LLM 推理。
 并发过多 → LLM 排队 → 全部超时 → 连锁崩溃。
-正确做法：用 timeoutSeconds: 0 异步发出，通过 NODE_COMPLETED 事件回收。
 ```
 
-## 回执协议
+### announce 回传机制（内置）
+
+OpenClaw 的 `sessions_send` 自带 announce 投递：
+- 发送者发出消息 → 目标 Agent 处理并回复 → announce 机制自动把回复投递回发送者的 IM 频道
+- 支持最多 5 轮 Ping-Pong 来回对话
+- `timeoutSeconds: 0` 也有 announce（后台异步投递）
+
+**关键原则**：
+```
+向下游派发任务 → timeoutSeconds: 0（不等回复，通过 NODE_COMPLETED 事件回收）
+向上游回报结果 → 不设 timeoutSeconds（让 announce 机制投递到用户的 IM）
+```
 
 所有任务完成/失败时，必须 sessions_send 回报给派发者：
 
