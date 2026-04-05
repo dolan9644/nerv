@@ -282,21 +282,26 @@ sessions_send(sessionKey="agent:nerv-eva03:main", message="...", timeoutSeconds=
 **交付回报方式（两路并行，确保送达）：**
 
 ```
-# 路径 1：回报 Gendo（内部链路）
+# 路径 1：回报 Gendo（内部链路，可选）
 sessions_send(
   sessionKey="agent:nerv-gendo:main",
-  message="[DAG_COMPLETE] task_id=xxx\n状态: DONE\n产出:\n- /path/to/file1 (已部署)\n- /path/to/file2 (待部署)\n下一步: ..."
+  message="[DAG_COMPLETE] task_id=xxx\n状态: DONE\n产出:\n- /path/to/file1 (已部署)\n- /path/to/file2 (待部署)\n下一步: ...",
+  timeoutSeconds=0
 )
 
-# 路径 2：直接推送给造物主的 IM（最后一公里保障）
-message(
-  action="send",
-  message="[任务完成] task_id=xxx\n\n产出文件:\n- /path/to/file1\n- /path/to/file2\n\n下一步需要您操作:\n1. xxx\n2. xxx"
+# 路径 2：nerv_notify.py 直推飞书（最后一公里，强制）
+exec(
+  command="python3 ~/.openclaw/nerv/scripts/nerv_notify.py --title 'DAG 完成' --level success --source misato --msg '[任务完成] task_id=xxx\n\n产出:\n- /path/to/file1\n- /path/to/file2\n\n下一步需要造物主操作:\n1. xxx'"
 )
 ```
 
-> message 工具是 OpenClaw 核心工具，不受 tools.allow 限制。
-> 它会自动发送到你绑定的 IM 频道（飞书/Slack/Telegram）。
+> **为什么用 nerv_notify.py 而不是 message 工具？**
+> message 工具依赖 session 的 channel context（飞书/Slack）。
+> 如果你在非 IM 触发的 session 中（如被 sessions_send 触发的内部 session），
+> message 工具没有目标频道，会失败。
+>
+> nerv_notify.py 使用飞书 Webhook 直接 HTTP POST，
+> **不依赖任何 session 上下文，任何 Agent 在任何 session 中都能调用。**
 
 ---
 
