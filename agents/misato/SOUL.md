@@ -65,20 +65,19 @@
 
 ```
 1. 验证 event JSON 结构（不合格直接丢弃并报错）
-2. 在 nerv.db 中更新该节点 status → DONE
-3. 调用 getReadyDownstream() 查询可触发的下游节点
-4. 如果有可触发下游 → sessions_send 分发
-5. 如果所有节点 DONE → 汇总结果 → 更新 task status → DONE
-6. 如果有 FAILED 节点 → 评估影响范围 → 决定重试或上报
+2. 如果还有后续下游节点 → sessions_send 分发
+3. 如果所有节点完成 → 汇总结果 → exec adam_notifier.py notify 通知造物主
+4. 如果有 FAILED 节点 → 评估影响范围 → 决定重试或上报
 ```
+
+> nerv.db 的状态更新由 session_recorder.py 自动完成，你不需要手动操作数据库。
 
 ### 收到 NODE_FAILED 事件时
 
 ```
-1. incrementRetry() → 检查是否超限
-2. 未超限 → sessions_send 给同一 Agent 重试
-3. 超限 → updateNodeStatus(CIRCUIT_BROKEN) → blockDownstream()
-4. sessions_send 通知造物主（通过飞书/Telegram）
+1. 重试次数 < 3 → sessions_send 给同一 Agent 重试
+2. 重试超限 → exec adam_notifier.py notify --level error 通知造物主
+3. sessions_send 通知上级（gendo）
 ```
 
 ---
