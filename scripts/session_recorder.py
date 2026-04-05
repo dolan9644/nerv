@@ -2,9 +2,9 @@
 """
 ███ NERV · Session Recorder · session_recorder.py ███
 
-物理层 DAG 录入器。每 5 分钟由 Cron 触发。
+物理层 DAG 录入器 + 自动通知器。每 5 分钟由 Cron 触发。
 扫描 Agent session log (.jsonl)，提取 NERV 协议事件，
-自动写入 nerv.db + memory_queue/。
+自动写入 nerv.db + memory_queue/ + 触发 adam_notifier 通知造物主。
 
 零 LLM 依赖。Agent 不需要做任何额外操作。
 
@@ -24,6 +24,7 @@ import sys
 import glob
 import sqlite3
 import time
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -334,6 +335,83 @@ def record_dispatch(conn, dispatch_data):
     return True
 
 # ═══════════════════════════════════════════════════════════════
+# 自动通知（Adam Notifier）
+# ═══════════════════════════════════════════════════════════════
+
+ADAM_NOTIFIER = os.path.join(NERV_ROOT, 'scripts', 'adam_notifier.py')
+NOTIFY_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.notified_events.json')
+
+def load_notified():
+    """加载已通知的事件 ID 集合（防止重复通知）"""
+    if os.path.exists(NOTIFY_STATE_FILE):
+        try:
+            with open(NOTIFY_STATE_FILE) as f:
+                return set(json.load(f))
+        except:
+            pass
+    return set()
+
+def save_notified(notified_set):
+    # 只保留最近 500 条，防止无限增长
+    recent = list(notified_set)[-500:]
+    with open(NOTIFY_STATE_FILE, 'w') as f:
+        json.dump(recent, f)
+
+def notify_completion(event_data, notified_set):
+    """
+    当检测到 NODE_COMPLETED / DAG_COMPLETE 时，自动调用 adam_notifier 通知造物主。
+    
+    这解决了 Misato session 压缩导致丢失通知的问题。
+    session_recorder 作为 Cron 独立运行，不依赖任何 Agent session。
+    """
+    event = event_data.get('event', {})
+    event_type = event.get('event', '')
+    
+    if event_type not in ('NODE_COMPLETED', 'NODE_FAILED', 'DAG_COMPLETE'):
+        return False
+    
+    # 构造唯一事件 ID 防止重复通知
+    event_id = f"{event.get('task_id','')}_{event.get('node_id','')}_{event_type}"
+    if event_id in notified_set:
+        return False
+    
+    if not os.path.exists(ADAM_NOTIFIER):
+        return False
+    
+    # 构造通知消息
+    source = event.get('source', 'unknown')
+    task_id = event.get('task_id', '')
+    node_id = event.get('node_id', '')
+    note = event.get('note', event.get('description', ''))
+    
+    if event_type == 'NODE_COMPLETED':
+        msg = f"✅ 任务完成 | {source} | {task_id}"
+        if note:
+            msg += f"\n📋 {note[:200]}"
+    elif event_type == 'NODE_FAILED':
+        error = event.get('error', '未知错误')
+        msg = f"❌ 任务失败 | {source} | {task_id}\n⚠️ {error}"
+    elif event_type == 'DAG_COMPLETE':
+        msg = f"🎯 DAG 全部完成 | {task_id}"
+    else:
+        return False
+    
+    try:
+        result = subprocess.run(
+            ['python3', ADAM_NOTIFIER, 'notify', '--message', msg],
+            capture_output=True, text=True, timeout=30,
+            cwd=NERV_ROOT
+        )
+        if result.returncode == 0:
+            notified_set.add(event_id)
+            return True
+        else:
+            # 静默失败，不阻塞主流程
+            return False
+    except Exception:
+        return False
+
+# ═══════════════════════════════════════════════════════════════
 # Memory Queue 写入
 # ═══════════════════════════════════════════════════════════════
 
@@ -389,7 +467,9 @@ def main():
     
     total_events = 0
     total_recorded = 0
+    total_notified = 0
     files_scanned = 0
+    notified_set = load_notified()
     
     conn = None if dry_run else ensure_db()
     
@@ -432,6 +512,9 @@ def main():
                             if ok:
                                 total_recorded += 1
                                 write_memory_queue(ev)
+                                # 自动通知造物主
+                                if notify_completion(ev, notified_set):
+                                    total_notified += 1
                         elif ev['type'] == 'dispatch':
                             ok = record_dispatch(conn, ev)
                             if ok:
@@ -441,6 +524,7 @@ def main():
         
         if not dry_run:
             save_state(state)
+            save_notified(notified_set)
     finally:
         if conn:
             conn.close()
@@ -450,6 +534,7 @@ def main():
         'files_scanned': files_scanned,
         'events_found': total_events,
         'records_written': total_recorded,
+        'notifications_sent': total_notified,
         'dry_run': dry_run
     }
     print(json.dumps(result, ensure_ascii=False))
