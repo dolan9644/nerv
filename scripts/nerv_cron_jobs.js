@@ -1,80 +1,119 @@
 /**
  * ███ NERV Cron Jobs 注册配置 ███
  *
- * 以下 JSON 块需要追加到 ~/.openclaw/cron/jobs.json → jobs[] 数组末尾。
- * 每个 Job 严格对应一个自动化维护任务。
- *
- * 三大定时任务：
- *   1. misato Spear Sync（每 5 分钟）— 孤儿节点 + 漏调度回收
- *   2. seele Security Probe（每 30 分钟）— 安全巡检
- *   3. rei Memory Purify（每天凌晨 3:00）— 记忆提纯
+ * 这些是 NERV 的核心基础设施 Cron。
+ * 它们不承担业务任务，只负责运行时维护、审计和补录。
  */
 
 const NERV_CRON_JOBS = [
   {
-    "id": "nerv-spear-sync",
-    "agentId": "nerv-misato",
-    "name": "NERV · Spear 状态对齐",
-    "description": "每 5 分钟执行 DAG 孤儿节点检测 + 漏调度回收 + 环路熔断",
-    "enabled": true,
-    "schedule": {
-      "kind": "cron",
-      "expr": "*/5 * * * *",
-      "tz": "Asia/Shanghai"
+    id: 'nerv-adam-notifier',
+    agentId: 'nerv-misato',
+    name: 'Adam 审批通知 (NERV)',
+    description: '每 10 分钟扫描 pending_approvals，发现新待批复项推送飞书卡片',
+    enabled: true,
+    schedule: {
+      kind: 'cron',
+      expr: '*/10 * * * *',
+      tz: 'Asia/Shanghai'
     },
-    "sessionTarget": "isolated",
-    "wakeMode": "now",
-    "payload": {
-      "kind": "agentTurn",
-      "message": "静默执行 Spear 状态对齐。执行: node ~/.openclaw/nerv/scripts/spear_sync.js。读取 JSON 输出。如果 orphans/missedDispatches/circuitBreaks 任一非空，对每个异常节点执行 sessions_send 通知对应 Agent 重新认领。如果全部为空，回复 HEARTBEAT_OK。执行结束后 MUST 立即 sessions.clear 销毁全部上下文。",
-      "timeoutSeconds": 120
+    sessionTarget: 'isolated',
+    wakeMode: 'now',
+    payload: {
+      kind: 'agentTurn',
+      message: '静默执行 Adam 审批通知。执行: python3 ~/.openclaw/nerv/scripts/adam_notifier.py scan。无待批复项则静默退出；有待批复项则推送飞书卡片。',
+      timeoutSeconds: 120
     },
-    "delivery": {
-      "mode": "none"
+    delivery: {
+      mode: 'none'
     }
   },
   {
-    "id": "nerv-security-probe",
-    "agentId": "nerv-seele",
-    "name": "NERV · SEELE 安全巡检",
-    "description": "每 30 分钟执行安全探针，检测未授权执行与路径越界",
-    "enabled": true,
-    "schedule": {
-      "kind": "cron",
-      "expr": "*/30 * * * *",
-      "tz": "Asia/Shanghai"
+    id: 'nerv-spear-sync',
+    agentId: 'nerv-misato',
+    name: 'NERV · Spear 状态对齐',
+    description: '每 5 分钟执行 DAG 孤儿节点检测 + 漏调度回收 + 环路熔断',
+    enabled: true,
+    schedule: {
+      kind: 'cron',
+      expr: '*/5 * * * *',
+      tz: 'Asia/Shanghai'
     },
-    "sessionTarget": "isolated",
-    "wakeMode": "now",
-    "payload": {
-      "kind": "agentTurn",
-      "message": "静默执行安全巡检。执行: node ~/.openclaw/nerv/scripts/security_probe.js --window 30。读取 JSON 输出。如果 anomalies 数组为空，回复 HEARTBEAT_OK。如果有异常：按 severity 严重程度，对 CRITICAL 级别的立即用 write 工具写入 sandbox_io/seele_alert_<timestamp>.json 并 sessions_send 通知 misato；对 HIGH 级别的写入审计日志（使用 write_audit_log 工具）。执行结束后 MUST 立即 sessions.clear。",
-      "timeoutSeconds": 120
+    sessionTarget: 'isolated',
+    wakeMode: 'now',
+    payload: {
+      kind: 'agentTurn',
+      message: '静默执行 Spear 状态对齐。执行: node ~/.openclaw/nerv/scripts/spear_sync.js。读取 JSON 输出。如果 orphans/missedDispatches/circuitBreaks 任一非空，向对应 Agent 与 misato 回传异常摘要；如果全部为空，回复 HEARTBEAT_OK。',
+      timeoutSeconds: 120
     },
-    "delivery": {
-      "mode": "none"
+    delivery: {
+      mode: 'none'
     }
   },
   {
-    "id": "nerv-memory-purify",
-    "agentId": "nerv-rei",
-    "name": "NERV · REI 记忆提纯",
-    "description": "每天凌晨 3:00 执行 memory_queue 分页消费与提纯",
-    "enabled": true,
-    "schedule": {
-      "kind": "cron",
-      "expr": "0 3 * * *",
-      "tz": "Asia/Shanghai"
+    id: 'nerv-security-probe',
+    agentId: 'nerv-seele',
+    name: 'NERV · SEELE 安全巡检',
+    description: '每 30 分钟执行安全探针，检测未授权执行与路径越界',
+    enabled: true,
+    schedule: {
+      kind: 'cron',
+      expr: '*/30 * * * *',
+      tz: 'Asia/Shanghai'
     },
-    "sessionTarget": "isolated",
-    "wakeMode": "now",
-    "payload": {
-      "kind": "agentTurn",
-      "message": "静默执行记忆提纯。执行: node ~/.openclaw/nerv/scripts/memory_purify.js --batch-size 100。读取控制台输出的统计数据。如果 total_processed > 0，将统计摘要写入 memory_queue/purify_report_<date>.md。执行结束后 MUST 立即 sessions.clear。",
-      "timeoutSeconds": 600
+    sessionTarget: 'isolated',
+    wakeMode: 'now',
+    payload: {
+      kind: 'agentTurn',
+      message: '静默执行安全巡检。执行: node ~/.openclaw/nerv/scripts/security_probe.js --window 30 --alert-dir ~/.openclaw/nerv/data/sandbox_io。读取 JSON 输出。如果 anomalies 数组为空，回复 HEARTBEAT_OK；如果有异常，使用返回的 alert_file 与异常摘要 sessions_send 通知 misato。',
+      timeoutSeconds: 120
     },
-    "delivery": {
-      "mode": "none"
+    delivery: {
+      mode: 'none'
+    }
+  },
+  {
+    id: 'nerv-memory-purify',
+    agentId: 'nerv-rei',
+    name: 'NERV · REI 记忆提纯',
+    description: '每天凌晨 3:00 执行 memory_queue 分页消费与提纯',
+    enabled: true,
+    schedule: {
+      kind: 'cron',
+      expr: '0 3 * * *',
+      tz: 'Asia/Shanghai'
+    },
+    sessionTarget: 'isolated',
+    wakeMode: 'now',
+    payload: {
+      kind: 'agentTurn',
+      message: '静默执行记忆提纯。执行: node ~/.openclaw/nerv/scripts/memory_purify.js --batch-size 100。脚本会优先使用本地 Ollama 模型压缩，失败后 fallback 到 Gemini CLI，最后回退到结构化摘要。读取控制台输出统计数据；如果 total_processed > 0，再写 purify_report_<date>.md 摘要。',
+      timeoutSeconds: 600
+    },
+    delivery: {
+      mode: 'none'
+    }
+  },
+  {
+    id: 'nerv-session-recorder',
+    agentId: 'nerv-misato',
+    name: 'NERV · Session 日志录入',
+    description: '每 5 分钟扫描 session 日志，提取任务记录写入 nerv.db + memory_queue',
+    enabled: true,
+    schedule: {
+      kind: 'cron',
+      expr: '*/5 * * * *',
+      tz: 'Asia/Shanghai'
+    },
+    sessionTarget: 'isolated',
+    wakeMode: 'now',
+    payload: {
+      kind: 'agentTurn',
+      message: '静默执行 session 日志录入。执行: python3 ~/.openclaw/nerv/scripts/session_recorder.py。读取 JSON 输出并汇报扫描统计。',
+      timeoutSeconds: 120
+    },
+    delivery: {
+      mode: 'none'
     }
   }
 ];

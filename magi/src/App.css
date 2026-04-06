@@ -111,6 +111,7 @@
   font-family: var(--font-display); font-size: 14px;
   color: var(--nerv-green); letter-spacing: 2px;
 }
+.heartbeat-time.running { color: var(--nerv-green); }
 .heartbeat-time.warning { color: var(--nerv-yellow); animation: pulse 1s ease-in-out infinite; }
 
 .clock-display { text-align: right; }

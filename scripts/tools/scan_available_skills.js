@@ -40,7 +40,9 @@ async function main() {
     } else if (input.agent_id) {
       skills = await withRetry((db) => {
         return db.prepare(`
-          SELECT skill_name, description, path, tags, compatible_agents
+          SELECT skill_name, description, path, tags, compatible_agents,
+                 source_type, load_source, source_priority, source_root,
+                 skill_key, gating_status, gating_reason
           FROM skill_registry
           WHERE compatible_agents LIKE ?
           ORDER BY skill_name
@@ -49,7 +51,9 @@ async function main() {
     } else {
       skills = await withRetry((db) => {
         return db.prepare(`
-          SELECT skill_name, description, path, tags, compatible_agents
+          SELECT skill_name, description, path, tags, compatible_agents,
+                 source_type, load_source, source_priority, source_root,
+                 skill_key, gating_status, gating_reason
           FROM skill_registry
           ORDER BY skill_name
         `).all();
@@ -63,15 +67,24 @@ async function main() {
       skills: skills.map(s => {
         let parsedTags = [];
         let parsedAgents = [];
+        let parsedGatingReason = null;
         try { parsedTags = JSON.parse(s.tags || '[]'); } catch (e) { /* fallback */ }
         try { parsedAgents = JSON.parse(s.compatible_agents || '[]'); } catch (e) { /* fallback */ }
+        try { parsedGatingReason = JSON.parse(s.gating_reason || 'null'); } catch (e) { /* fallback */ }
 
         return {
           name: s.skill_name,
           description: s.description,
           path: s.path,
           tags: parsedTags,
-          compatible_agents: parsedAgents
+          compatible_agents: parsedAgents,
+          source_type: s.source_type,
+          load_source: s.load_source,
+          source_priority: s.source_priority,
+          source_root: s.source_root,
+          skill_key: s.skill_key,
+          gating_status: s.gating_status,
+          gating_reason: parsedGatingReason
         };
       })
     }, null, 2));

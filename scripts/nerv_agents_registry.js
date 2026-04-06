@@ -20,7 +20,7 @@ const w = (name) => join(NERV_ROOT, 'agents', name);
 const NERV_ENV = {
   "NERV_ROOT": NERV_ROOT,
   "NERV_DB_PATH": join(NERV_ROOT, 'data', 'db', 'nerv.db'),
-  "NERV_SANDBOX_IO": join(NERV_ROOT, 'sandbox_io'),
+  "NERV_SANDBOX_IO": join(NERV_ROOT, 'data', 'sandbox_io'),
   "NERV_SHARED_DIR": join(NERV_ROOT, 'agents', 'shared'),
   "NERV_MEMORY_QUEUE": join(NERV_ROOT, 'memory_queue')
 };

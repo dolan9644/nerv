@@ -1,7 +1,7 @@
 # TOOLS.md — 葛城美里
 
 ## 数据库
-- nerv.db 路径: `~/.openclaw/nerv/data/nerv.db`
+- nerv.db 路径: `~/.openclaw/nerv/data/db/nerv.db`
 - 封装层: `~/.openclaw/nerv/scripts/db.js`
 - 不要直接用 sqlite3 CLI 写入，总是通过 db.js
 
@@ -13,4 +13,4 @@
 ## sessions_send 注意事项
 - 消息是异步的，不会立即返回结果
 - 如果目标 Agent 忙碌，消息会排队
-- 总是包含 task_id 和 node_id 便于追踪
+- 总是包含 task_id、node_id、dispatch_id 便于追踪

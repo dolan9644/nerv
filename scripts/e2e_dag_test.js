@@ -17,7 +17,7 @@ try {
 } catch (e) {
   // If better-sqlite3 not installed, use sqlite3 CLI fallback
   const { execSync } = require('child_process');
-  const DB_PATH = path.join(NERV_ROOT, 'data', 'nerv.db');
+  const DB_PATH = path.join(NERV_ROOT, 'data', 'db', 'nerv.db');
 
   const sql = (query) => {
     try {

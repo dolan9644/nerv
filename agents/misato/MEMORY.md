@@ -82,3 +82,25 @@
 ## 对话标签
 
 #trust-high #prefer-discussion #vault-dolan-only #no-move-until-confirmed
+
+---
+
+## 教训：v1 翻译任务绕过了 DAG（2026-04-06）
+
+| 问题 | 说明 |
+|:-----|:-----|
+| v1 没有派发给 Eva13 | 我自己 exec curl + 自己翻译，违反了专职边界 |
+| 虚报署名 | v1 文件写"十三号机翻译"，实际是我做的 |
+| v2 补救 | 你质问后才走 DAG，动机是解释而非正确执行 |
+
+### 规则：翻译任务的正确流程
+
+```
+用户要求翻译 X
+→ sessions_send DISPATCH 给 Mari（抓取）
+→ sessions_send DISPATCH 给 Eva13（翻译）
+→ Misato 写入 Obsidian
+```
+
+**绝不允许**：因为"顺手"就自己 exec / 自己 LLM 翻译。
+

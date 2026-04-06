@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nerv.local/schemas/node-contract-v1.schema.json",
+  "title": "NERV Node Contract v1",
+  "description": "Machine-readable contract for a single DAG node. Intended to be embedded under nodes[].contract inside tasks.dag_json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "completion_contract"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "dispatch_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "agent_session",
+            "tool_exec",
+            "approval_gate",
+            "human_input",
+            "cron_only"
+          ]
+        },
+        "target_agent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "output_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input_artifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "completion_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "event_only",
+            "artifact_only",
+            "event_and_artifact",
+            "event_or_artifact",
+            "approval_only"
+          ]
+        },
+        "accepted_events": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "NODE_COMPLETED",
+              "NODE_FAILED",
+              "NODE_OBSERVED_DONE",
+              "NODE_OBSERVED_FAILED"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "required_artifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "optional_artifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "artifact_match_mode": {
+          "type": "string",
+          "enum": [
+            "all",
+            "any"
+          ],
+          "default": "all"
+        },
+        "require_task_id_match": {
+          "type": "boolean",
+          "default": true
+        },
+        "require_node_id_match": {
+          "type": "boolean",
+          "default": true
+        },
+        "result_path_from": {
+          "type": "string",
+          "enum": [
+            "first_required_artifact",
+            "first_optional_artifact",
+            "explicit_event_field"
+          ]
+        }
+      }
+    },
+    "runtime_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retry_backoff_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "orphan_threshold_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "observation_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "session_event",
+              "artifact_fs",
+              "audit_log",
+              "approval_table",
+              "cron_health"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "dedupe_key_template": {
+          "type": "string",
+          "enum": [
+            "task_id:node_id:event",
+            "task_id:node_id:artifact",
+            "task_id:node_id:event:artifact"
+          ]
+        },
+        "artifact_root": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "completion_contract": {
+            "properties": {
+              "mode": {
+                "const": "event_only"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "completion_contract": {
+            "required": [
+              "accepted_events"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "completion_contract": {
+            "properties": {
+              "mode": {
+                "const": "artifact_only"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "completion_contract": {
+            "required": [
+              "required_artifacts"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "completion_contract": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "event_and_artifact",
+                  "event_or_artifact"
+                ]
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "completion_contract": {
+            "required": [
+              "accepted_events",
+              "required_artifacts"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "stringArray": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

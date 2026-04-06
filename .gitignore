@@ -32,9 +32,18 @@ corrupted/
 # ═══ 脚本运行时产出 ═══
 # 状态文件（Adam Notifier 等）
 scripts/.*
+!scripts/.gitkeep
 # 生成的报告（daily-report 等）
 scripts/*-report-*.md
 scripts/*-report-*.json
+scripts/__pycache__/
+**/__pycache__/
+agents/*/.tables
+
+# ═══ 只供本地审阅的草稿 / 私有 skill 资产 ═══
+README.proposed.md
+agents/*/SKILLS/
+agents/eva-02/execute_search.py
 
 # ═══ Node.js ═══
 node_modules/

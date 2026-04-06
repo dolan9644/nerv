@@ -1,6 +1,6 @@
 # TOOLS.md — 碇真嗣
 ## 数据库
-- nerv.db: `~/.openclaw/nerv/data/nerv.db`（通过 db.js）
+- nerv.db: `~/.openclaw/nerv/data/db/nerv.db`（通过 db.js）
 ## 下游 Agent
 - mari（爬虫抓取）
 - eva-03（深度搜索）

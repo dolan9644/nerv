@@ -2,6 +2,11 @@ export default function Header({ clock, heartbeat, connected, approvalsPending =
   const nodeRunning = systemStats.nodes?.RUNNING || 0;
   const nodeDone = systemStats.nodes?.DONE || 0;
   const nodeFailed = (systemStats.nodes?.FAILED || 0) + (systemStats.nodes?.CIRCUIT_BROKEN || 0);
+  const heartbeatClass = heartbeat.status === 'error'
+    ? 'warning'
+    : heartbeat.status === 'running'
+      ? 'running'
+      : (heartbeat.countdown !== null && heartbeat.countdown < 30 ? 'warning' : '');
 
   return (
     <header className="header">
@@ -25,7 +30,7 @@ export default function Header({ clock, heartbeat, connected, approvalsPending =
       <div className="header-right">
         <div className="heartbeat-display">
           <span className="heartbeat-label">SPEAR</span>
-          <span className={`heartbeat-time ${heartbeat.countdown < 30 ? 'warning' : ''}`}>
+          <span className={`heartbeat-time ${heartbeatClass}`}>
             {heartbeat.display}
           </span>
         </div>

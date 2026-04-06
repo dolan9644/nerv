@@ -26,6 +26,14 @@ const fs = require('fs');
 const NERV_ROOT = path.join(process.env.HOME, '.openclaw', 'nerv');
 const PORT = 3939;
 
+function readJsonSafe(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
 // ─── 数据库连接 ───
 let db;
 try {
@@ -272,6 +280,10 @@ function apiSystemStats() {
   }
 }
 
+function apiInfraJobState(jobId) {
+  return readJsonSafe(path.join(NERV_ROOT, 'data', 'runtime', 'jobs', `${jobId}.json`));
+}
+
 function apiStatus() {
   const tasks = apiTasks();
   const activeDag = tasks.find(t => t.status === 'RUNNING') || tasks[0] || null;
@@ -280,6 +292,7 @@ function apiStatus() {
   return {
     agents: apiAgents(),
     activeDag,
+    spear: apiInfraJobState('nerv-spear-sync'),
     approvals_pending: pendingCount,
     stats: apiSystemStats(),
     timestamp: new Date().toISOString()
@@ -316,6 +329,7 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/approvals')      return json(apiApprovals());
   if (pathname === '/api/harness-stats')  return json(apiHarnessStats());
   if (pathname === '/api/system-stats')   return json(apiSystemStats());
+  if (pathname === '/api/runtime')        return json({ spear: apiInfraJobState('nerv-spear-sync') });
   if (pathname === '/api/skills')         return json(apiSkills());
   if (pathname === '/api/scrolls')        return json(apiDeadSeaScrolls());
   if (pathname === '/api/breaker-logs')   return json(apiBreakerLogs());

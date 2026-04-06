@@ -10,7 +10,6 @@
  */
 
 import {
-  getOrphanNodes,
   updateNodeStatus,
   writeAuditLog,
   blockDownstream,
@@ -28,38 +27,178 @@ const STALE_THRESHOLD_SECONDS = 7200;   // RUNNING 超过 2 小时 = 强制 FAIL
 // 分级孤岛阈值：长耗时 Agent 给更宽松的窗口
 const AGENT_ORPHAN_THRESHOLDS = {
   'nerv-mari':    300,   // 5min（网络爬取耗时长）
-  'nerv-eva-13':  300,   // 5min（万字文案生成）
+  'nerv-eva13':   300,   // 5min（万字文案生成）
   'nerv-eva01':   300,   // 5min（Docker 部署耗时）
   'nerv-kaworu':  240,   // 4min（深度代码审查）
 };
+const PASSIVE_DISPATCH_MODES = new Set(['cron_only', 'approval_gate', 'human_input']);
+
+function parseJsonMaybe(text) {
+  if (!text || typeof text !== 'string') return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function createTaskCache() {
+  return new Map();
+}
+
+async function loadTaskSnapshot(taskId, cache) {
+  if (!taskId) {
+    return { row: null, dag: null, nodesById: new Map() };
+  }
+  if (cache.has(taskId)) {
+    return cache.get(taskId);
+  }
+
+  const row = await withRetry((db) => {
+    return db.prepare('SELECT task_id, dag_json FROM tasks WHERE task_id = ?').get(taskId);
+  });
+
+  const snapshot = {
+    row,
+    dag: null,
+    nodesById: new Map()
+  };
+
+  const dag = parseJsonMaybe(row?.dag_json || '');
+  if (dag && Array.isArray(dag.nodes)) {
+    snapshot.dag = dag;
+    for (const node of dag.nodes) {
+      if (node?.node_id) {
+        snapshot.nodesById.set(node.node_id, node);
+      }
+    }
+  }
+
+  cache.set(taskId, snapshot);
+  return snapshot;
+}
+
+async function getNodeContract(taskId, nodeId, cache) {
+  const snapshot = await loadTaskSnapshot(taskId, cache);
+  return snapshot.nodesById.get(nodeId)?.contract || null;
+}
+
+async function getLatestDispatchMeta(taskId, nodeId) {
+  const row = await withRetry((db) => {
+    return db.prepare(`
+      SELECT detail, created_at
+      FROM audit_logs
+      WHERE task_id = ? AND node_id = ? AND action = 'RECORDED_DISPATCH'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(taskId, nodeId);
+  });
+
+  const detail = parseJsonMaybe(row?.detail || '');
+  return {
+    dispatch_id: detail?.dispatch_id || null,
+    target_agent: detail?.target_agent || null,
+    session_key: detail?.session_key || null,
+    timeout_seconds: detail?.timeout_seconds ?? null,
+    created_at: row?.created_at ?? null
+  };
+}
+
+async function auditExistsRecently(taskId, nodeId, action, windowSeconds = 900) {
+  const cutoff = Math.floor(Date.now() / 1000) - windowSeconds;
+  const row = await withRetry((db) => {
+    return db.prepare(`
+      SELECT 1
+      FROM audit_logs
+      WHERE task_id = ? AND node_id = ? AND action = ? AND created_at >= ?
+      LIMIT 1
+    `).get(taskId, nodeId, action, cutoff);
+  });
+  return Boolean(row);
+}
+
+async function resolveNodeRuntime(taskId, nodeId, agentId, cache) {
+  const contract = await getNodeContract(taskId, nodeId, cache);
+  const runtime = contract?.runtime_contract || {};
+  const dispatch = contract?.dispatch_contract || {};
+  const orphanThreshold = runtime.orphan_threshold_seconds || AGENT_ORPHAN_THRESHOLDS[agentId] || ORPHAN_THRESHOLD_SECONDS;
+  return {
+    orphanThreshold,
+    orphanThresholdSource: runtime.orphan_threshold_seconds ? 'runtime_contract.orphan_threshold_seconds' : (AGENT_ORPHAN_THRESHOLDS[agentId] ? 'agent_override' : 'default'),
+    timeoutSeconds: runtime.timeout_seconds || null,
+    maxRetries: runtime.max_retries ?? null,
+    targetAgent: dispatch.target_agent || agentId || null,
+    dispatchMode: dispatch.mode || 'agent_session'
+  };
+}
 
 // ═══════════════════════════════════════════════════════════════
 // 1. 孤岛节点检测与修复
 // ═══════════════════════════════════════════════════════════════
 
 async function detectOrphanNodes() {
-  const orphans = await getOrphanNodes(ORPHAN_THRESHOLD_SECONDS);
+  const orphans = await withRetry((db) => {
+    return db.prepare(`
+      SELECT node_id, task_id, agent_id, updated_at
+      FROM dag_nodes
+      WHERE status = 'RUNNING'
+    `).all();
+  });
   const results = [];
+  const taskCache = createTaskCache();
 
   for (const node of orphans) {
     const elapsed = Math.floor(Date.now() / 1000) - node.updated_at;
+    const runtime = await resolveNodeRuntime(node.task_id, node.node_id, node.agent_id, taskCache);
+    const agentThreshold = runtime.orphanThreshold;
+    const staleThreshold = runtime.timeoutSeconds
+      ? Math.max(runtime.timeoutSeconds, agentThreshold)
+      : Math.max(STALE_THRESHOLD_SECONDS, agentThreshold * 10);
 
-    // 分级阈值：先查该 Agent 的专属阈值，无则用默认
-    const agentThreshold = AGENT_ORPHAN_THRESHOLDS[node.agent_id] || ORPHAN_THRESHOLD_SECONDS;
     if (elapsed < agentThreshold) continue;  // 未超阈，跳过
 
-    if (elapsed > STALE_THRESHOLD_SECONDS) {
-      // 超过 2 小时：强制 FAILED
-      await updateNodeStatus(node.node_id, 'FAILED', null, 'Spear: stale node force-killed after 2h');
+    if (elapsed >= staleThreshold) {
+      await updateNodeStatus(node.node_id, 'FAILED', null, 'Spear: runtime timeout or stale threshold exceeded');
       await blockDownstream(node.node_id, node.task_id);
       await writeAuditLog(node.task_id, node.node_id, 'spear', 'FORCE_KILL', 
-        JSON.stringify({ elapsed_seconds: elapsed, reason: 'stale_threshold_exceeded', agent_threshold: agentThreshold }));
-      results.push({ node_id: node.node_id, action: 'FORCE_KILLED', elapsed });
+        JSON.stringify({
+          elapsed_seconds: elapsed,
+          reason: runtime.timeoutSeconds ? 'runtime_timeout_exceeded' : 'stale_threshold_exceeded',
+          agent_threshold: agentThreshold,
+          orphan_threshold_source: runtime.orphanThresholdSource,
+          timeout_seconds: runtime.timeoutSeconds,
+          stale_threshold_seconds: staleThreshold,
+          dispatch_mode: runtime.dispatchMode
+        }));
+      results.push({
+        node_id: node.node_id,
+        task_id: node.task_id,
+        agent_id: node.agent_id,
+        action: 'FORCE_KILLED',
+        elapsed,
+        orphan_threshold_seconds: agentThreshold,
+        orphan_threshold_source: runtime.orphanThresholdSource,
+        timeout_seconds: runtime.timeoutSeconds,
+        stale_threshold_seconds: staleThreshold
+      });
     } else {
-      // 超阈但未超 2h：标记为疑似孤岛
-      results.push({ node_id: node.node_id, action: 'ORPHAN_SUSPECTED', elapsed });
+      results.push({
+        node_id: node.node_id,
+        task_id: node.task_id,
+        agent_id: node.agent_id,
+        action: 'ORPHAN_SUSPECTED',
+        elapsed,
+        orphan_threshold_seconds: agentThreshold,
+        timeout_seconds: runtime.timeoutSeconds
+      });
       await writeAuditLog(node.task_id, node.node_id, 'spear', 'ORPHAN_DETECTED',
-        JSON.stringify({ elapsed_seconds: elapsed, agent_threshold: agentThreshold }));
+        JSON.stringify({
+          elapsed_seconds: elapsed,
+          agent_threshold: agentThreshold,
+          orphan_threshold_source: runtime.orphanThresholdSource,
+          timeout_seconds: runtime.timeoutSeconds,
+          dispatch_mode: runtime.dispatchMode
+        }));
     }
   }
 
@@ -89,15 +228,41 @@ async function detectMissedDispatches() {
     `).all();
   });
 
-  // 主动干预：将漏调度节点从 PENDING 提升为 RUNNING，触发重调度
+  const results = [];
+  const taskCache = createTaskCache();
+
   for (const node of missed) {
-    await updateNodeStatus(node.node_id, 'RUNNING', null,
-      'Spear: force-redispatched missed node');
-    await writeAuditLog(node.task_id, node.node_id, 'spear', 'FORCE_REDISPATCH',
-      JSON.stringify({ agent_id: node.agent_id, reason: 'all_predecessors_done_but_still_pending' }));
+    const runtime = await resolveNodeRuntime(node.task_id, node.node_id, node.agent_id, taskCache);
+    const dispatchMeta = await getLatestDispatchMeta(node.task_id, node.node_id);
+    const action = PASSIVE_DISPATCH_MODES.has(runtime.dispatchMode)
+      ? 'DISPATCH_WAIT_EXPECTED'
+      : 'REDISPATCH_REQUIRED';
+    const detail = {
+      agent_id: node.agent_id,
+      target_agent: dispatchMeta.target_agent || runtime.targetAgent,
+      dispatch_mode: runtime.dispatchMode,
+      dispatch_id: dispatchMeta.dispatch_id,
+      timeout_seconds: dispatchMeta.timeout_seconds ?? runtime.timeoutSeconds,
+      reason: 'all_predecessors_done_but_still_pending',
+      requires_external_runner: !PASSIVE_DISPATCH_MODES.has(runtime.dispatchMode)
+    };
+
+    const alreadyLogged = await auditExistsRecently(node.task_id, node.node_id, action, 900);
+    if (!alreadyLogged) {
+      await writeAuditLog(node.task_id, node.node_id, 'spear', action,
+        JSON.stringify(detail));
+    }
+
+    results.push({
+      node_id: node.node_id,
+      task_id: node.task_id,
+      agent_id: node.agent_id,
+      action,
+      ...detail
+    });
   }
 
-  return missed;
+  return results;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -105,20 +270,31 @@ async function detectMissedDispatches() {
 // ═══════════════════════════════════════════════════════════════
 
 async function detectCircuitBreaks() {
-  const overLimit = await withRetry((db) => {
+  const candidates = await withRetry((db) => {
     return db.prepare(`
       SELECT node_id, task_id, agent_id, retry_count, max_retries
       FROM dag_nodes
-      WHERE retry_count >= max_retries AND status NOT IN ('DONE', 'CIRCUIT_BROKEN', 'BLOCKED')
+      WHERE status NOT IN ('DONE', 'CIRCUIT_BROKEN', 'BLOCKED')
     `).all();
   });
 
+  const taskCache = createTaskCache();
+  const overLimit = [];
+
+  for (const node of candidates) {
+    const runtime = await resolveNodeRuntime(node.task_id, node.node_id, node.agent_id, taskCache);
+    const effectiveMaxRetries = runtime.maxRetries ?? node.max_retries;
+    if (node.retry_count >= effectiveMaxRetries) {
+      overLimit.push({ ...node, effectiveMaxRetries });
+    }
+  }
+
   for (const node of overLimit) {
     await updateNodeStatus(node.node_id, 'CIRCUIT_BROKEN', null, 
-      `Spear: circuit broken after ${node.retry_count} retries (limit: ${node.max_retries})`);
+      `Spear: circuit broken after ${node.retry_count} retries (limit: ${node.effectiveMaxRetries})`);
     await blockDownstream(node.node_id, node.task_id);
     await writeAuditLog(node.task_id, node.node_id, 'spear', 'CIRCUIT_BREAK',
-      JSON.stringify({ retry_count: node.retry_count, max_retries: node.max_retries }));
+      JSON.stringify({ retry_count: node.retry_count, max_retries: node.effectiveMaxRetries }));
   }
 
   return overLimit;

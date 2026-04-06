@@ -15,6 +15,7 @@ export function useAgentStatus() {
   const [agents, setAgents] = useState(initAgentState);
   const [connected, setConnected] = useState(false);
   const [activeDag, setActiveDag] = useState(null);
+  const [spear, setSpear] = useState(null);
   const [approvalsPending, setApprovalsPending] = useState(0);
   const [systemStats, setSystemStats] = useState({ tasks: {}, nodes: {} });
   const eventSourceRef = useRef(null);
@@ -52,6 +53,7 @@ export function useAgentStatus() {
 
         // 活跃 DAG
         if (data.activeDag) setActiveDag(data.activeDag);
+        if (data.spear !== undefined) setSpear(data.spear);
 
         // 审批计数
         if (data.approvals_pending !== undefined) setApprovalsPending(data.approvals_pending);
@@ -80,7 +82,7 @@ export function useAgentStatus() {
     }));
   }, []);
 
-  return { agents, connected, updateAgent, activeDag, approvalsPending, systemStats };
+  return { agents, connected, updateAgent, activeDag, approvalsPending, systemStats, spear };
 }
 
 // ─── 审计日志 ───
@@ -197,19 +199,36 @@ export function useClock() {
 }
 
 // ─── Heartbeat 倒计时 ───
-export function useHeartbeat() {
-  const [countdown, setCountdown] = useState(300);
+export function useHeartbeat(spear) {
+  const [nowMs, setNowMs] = useState(Date.now());
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setCountdown(prev => (prev <= 0 ? 300 : prev - 1));
+      setNowMs(Date.now());
     }, 1000);
     return () => clearInterval(interval);
   }, []);
 
+  const status = spear?.status || 'idle';
+  const nextRunAtMs = spear?.next_run_at_ms || null;
+  const countdown = nextRunAtMs
+    ? Math.max(0, Math.floor((nextRunAtMs - nowMs) / 1000))
+    : null;
   const min = Math.floor(countdown / 60);
   const sec = countdown % 60;
-  const display = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  const display = status === 'running'
+    ? 'RUN'
+    : countdown === null
+      ? '--:--'
+      : `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 
-  return { countdown, display, isTriggering: countdown === 0 };
+  return {
+    countdown,
+    display,
+    isTriggering: countdown === 0,
+    status,
+    nextRunAtMs,
+    summary: spear?.summary || null,
+    lastStatus: spear?.last_status || null
+  };
 }

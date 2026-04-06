@@ -27,8 +27,25 @@
       （格式: {"required": [...], "optional": [...]}，供 EVA-00 的 schema_validator.py 读取）
       → 然后 sessions_send 给 eva-00（等上游完成后）
    e. 文案生成 → sessions_send 给 eva-13（等清洗完成后）
-3. 按依赖顺序分发（不并行发给有依赖关系的节点）
-4. 所有中间数据写入 shared/inbox/（抓取）→ shared/cleaned/（清洗）→ shared/content/（生成）
+   f. 仓库更新采集（GitHub / Release / PR 报告类数据）→ 通过固定 collector script 或 gh CLI 生成结构化 JSON
+      - 若结果已经是结构化报告输入，可直接进入文案生成，不强制经过 eva-00
+      - 只有确实需要去重、白名单过滤、评分时，才进入 eva-00
+      - 若 `mari` / `eva-03` 全部不可达，`shinji` 直接 self-exec 固定 collector script，记录 `fallback_reason = frontline_data_collectors_unavailable`
+      - 若 payload 已提供 `output_dir`，必须优先写入该目录
+      - 若调用固定 collector script，优先传 `--task-id <task_id>`；若 payload 提供 `output_dir`，则传 `--output-dir <output_dir>`
+3. 分发前先读 `nerv.db.agents`：
+   - 若目标 Agent 的 `status != IDLE`
+   - 或 `last_heartbeat` 已陈旧
+   - 或 `current_task_id` 与预期任务冲突
+   - 则视为不可达，改走 fallback / alternate owner
+4. 按依赖顺序分发（不并行发给有依赖关系的节点）
+5. 所有中间数据写入 shared/inbox/（抓取）→ shared/cleaned/（清洗）→ shared/content/（生成）
+
+```
+调度补充：
+- 对下游数据节点默认使用 sessions_send(timeoutSeconds=0)
+- 不要同步等待 callback，把完成回收交给 NODE_COMPLETED / recorder
+```
 ```
 
 ### 下游回报结果时
@@ -54,12 +71,13 @@
 ```json
 {
   "event": "DISPATCH",
+  "dispatch_id": "task_id:node_id:dispatch-001",
   "source": "nerv-shinji",
   "task_id": "uuid-string",
   "node_id": "uuid-string",
   "payload": {
     "description": "任务描述",
-    "data_type": "crawl | search | clean | generate | monitor",
+    "data_type": "crawl | search | clean | generate | monitor | repo_collect",
     "input_paths": [],
     "output_dir": "~/.openclaw/nerv/agents/shared/<type>/",
     "constraints": {
@@ -86,6 +104,7 @@
 ```json
 {
   "event": "NODE_COMPLETED | NODE_FAILED",
+  "dispatch_id": "从收到的 DISPATCH 原样回传",
   "source": "nerv-shinji",
   "task_id": "uuid-string",
   "node_id": "uuid-string",
@@ -105,6 +124,7 @@
 ```json
 {
   "event": "NODE_COMPLETED | NODE_FAILED",
+  "dispatch_id": "从收到的 DISPATCH 原样回传",
   "source": "nerv-<agent-id>",
   "task_id": "uuid-string",
   "node_id": "uuid-string",
@@ -220,10 +240,11 @@ sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
 每 15 分钟触发。检查数据 Agent 的超时任务。
 
 ```
-1. 查询 nerv.db 中 agent_id IN (mari, eva-00~13, eva-series) 且 status=RUNNING
-2. RUNNING > 10 分钟无更新 → sessions_send 确认
-3. 无响应 → retry 或上报 misato
-4. 无异常 → HEARTBEAT_OK
+1. 查询 nerv.db 中 agent_id IN (mari, eva-00~13, eva-series) 的 `status / current_task_id / last_heartbeat`
+2. RUNNING > 10 分钟无更新，或 `last_heartbeat` 已陈旧 → 视为不可达
+3. 不要把 `sessions_send` 当 callback 去阻塞等待；只做异步确认 / fallback
+4. 无响应 → retry 或上报 misato
+5. 无异常 → HEARTBEAT_OK
 ```
 
 ---

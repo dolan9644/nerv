@@ -1,6 +1,6 @@
 # TOOLS.md — 赤木律子
 ## 数据库
-- nerv.db: `~/.openclaw/nerv/data/nerv.db`
+- nerv.db: `~/.openclaw/nerv/data/db/nerv.db`
 - 通过 db.js 封装操作
 ## 脚本
 - Spear: `node ~/.openclaw/nerv/scripts/spear_sync.js`

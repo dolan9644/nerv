@@ -14,10 +14,12 @@
  */
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, statSync, rmdirSync } from 'fs';
+import { spawnSync } from 'child_process';
 import { join, basename, extname } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { writeAuditLog, closeDb } from './db.js';
+import NERV_AGENTS from './nerv_agents_registry.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -33,6 +35,11 @@ const CORRUPTED_DIR = join(QUEUE_DIR, 'corrupted');  // Rei SOUL.md 损坏文件
 const AGENTS_DIR = join(NERV_ROOT, 'agents');
 const SHARED_MEMORY_DIR = join(AGENTS_DIR, 'shared', 'memory');
 const VALID_EXTENSIONS = new Set(['.md', '.json', '.txt']);
+const AGENT_BY_ID = new Map(NERV_AGENTS.map(agent => [agent.id, agent]));
+const WORKSPACE_TO_AGENT_ID = new Map(
+  NERV_AGENTS.map(agent => [basename(agent.workspace), agent.id])
+);
+const IGNORED_QUEUE_PREFIXES = ['purify_report_'];
 
 // 命令行参数
 const args = process.argv.slice(2);
@@ -42,6 +49,9 @@ const DRY_RUN = args.includes('--dry-run');
 // V8 内存安全阈值
 const MAX_FILE_SIZE = 1024 * 1024; // 1MB
 const MAX_MEMORY_LINES = 200;
+const MAX_COMPACT_INPUT_CHARS = 6000;
+
+let cachedOllamaModel = null;
 
 // ═══════════════════════════════════════════════════════════════
 // 目录准备
@@ -87,12 +97,219 @@ function scanQueue() {
 
   return readdirSync(QUEUE_DIR)
     .filter(f => {
+      if (IGNORED_QUEUE_PREFIXES.some(prefix => f.startsWith(prefix))) return false;
       const ext = extname(f).toLowerCase();
       if (!VALID_EXTENSIONS.has(ext)) return false;
       const fullPath = join(QUEUE_DIR, f);
       try { return statSync(fullPath).isFile(); } catch { return false; }
     })
     .sort();
+}
+
+function normalizeAgentReference(value) {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed === 'shared' || trimmed === 'unknown') return 'shared';
+  if (AGENT_BY_ID.has(trimmed)) return trimmed;
+  if (trimmed.startsWith('nerv-') && AGENT_BY_ID.has(trimmed)) return trimmed;
+
+  const workspaceKey = trimmed.replace(/^nerv-/, '');
+  if (WORKSPACE_TO_AGENT_ID.has(workspaceKey)) {
+    return WORKSPACE_TO_AGENT_ID.get(workspaceKey);
+  }
+
+  return null;
+}
+
+function resolveMemoryTargetDir(agentRef) {
+  const normalized = normalizeAgentReference(agentRef);
+  if (!normalized || normalized === 'shared') {
+    return { agentId: 'shared', memoryDir: SHARED_MEMORY_DIR, label: 'shared' };
+  }
+
+  const agent = AGENT_BY_ID.get(normalized);
+  if (!agent) {
+    return { agentId: 'shared', memoryDir: SHARED_MEMORY_DIR, label: 'shared' };
+  }
+
+  return {
+    agentId: normalized,
+    memoryDir: join(agent.workspace, 'memory'),
+    label: agent.name || agent.identity?.name || normalized
+  };
+}
+
+function parseQueueRecord(rawContent) {
+  if (typeof rawContent !== 'string') return null;
+  try {
+    const parsed = JSON.parse(rawContent);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function stringifyCompact(value, limit = 240) {
+  if (value === null || value === undefined) return '';
+  const raw = typeof value === 'string' ? value : (() => {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  })();
+  return raw.length > limit ? `${raw.slice(0, limit)}…` : raw;
+}
+
+function buildCompressionPrompt(record, targetAgentId, rawContent) {
+  const compactInput = rawContent.slice(0, MAX_COMPACT_INPUT_CHARS);
+  const fields = [
+    `event: ${record?.event || ''}`,
+    `task_id: ${record?.task_id || ''}`,
+    `node_id: ${record?.node_id || ''}`,
+    `dispatch_id: ${record?.dispatch_id || ''}`,
+    `source_agent: ${record?.source_agent || ''}`,
+    `memory_targets: ${stringifyCompact(record?.memory_targets || [])}`,
+    `task_intent: ${record?.task_intent || ''}`,
+    `node_description: ${record?.node_description || ''}`,
+    `task_status: ${record?.task_status || ''}`,
+    `outputs: ${stringifyCompact(record?.outputs || [])}`,
+    `error: ${stringifyCompact(record?.error || '')}`,
+    `note: ${stringifyCompact(record?.note || '')}`
+  ].join('\n');
+
+  return [
+    `你是 NERV 的记忆压缩器。请把这条运行事实压缩成适合写入 ${targetAgentId}/MEMORY.md 的内容。`,
+    `要求：`,
+    `- 只保留可复用事实、教训、稳定偏好、失败原因、成功模式`,
+    `- 删除时间戳噪音、重复日志、无意义聊天`,
+    `- 输出中文 Markdown，2-5 条要点`,
+    `- 不要编造`,
+    `- 如果这条记录更适合共享记忆，请在末尾额外加一行 "共享建议: 是/否"`,
+    ``,
+    `结构化元数据：`,
+    fields,
+    ``,
+    `原始内容：`,
+    compactInput
+  ].join('\n');
+}
+
+function discoverOllamaModel() {
+  if (cachedOllamaModel !== null) return cachedOllamaModel;
+
+  const explicit = process.env.NERV_MEMORY_OLLAMA_MODEL || process.env.OLLAMA_MODEL;
+  if (explicit) {
+    cachedOllamaModel = explicit.trim();
+    return cachedOllamaModel;
+  }
+
+  try {
+    const result = spawnSync('ollama', ['list'], { encoding: 'utf-8', timeout: 5000 });
+    if (result.status === 0 && result.stdout) {
+      const lines = result.stdout.split('\n').map(line => line.trim()).filter(Boolean);
+      if (lines.length >= 2) {
+        const header = lines[0].toLowerCase();
+        const looksLikeTable = header.includes('name') || header.includes('model');
+        const dataLine = looksLikeTable ? lines[1] : lines[0];
+        const modelName = dataLine.split(/\s+/)[0];
+        if (modelName) {
+          cachedOllamaModel = modelName;
+          return cachedOllamaModel;
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  cachedOllamaModel = '';
+  return cachedOllamaModel;
+}
+
+function runModelCompression(command, args, timeoutMs = 120000) {
+  try {
+    const result = spawnSync(command, args, {
+      encoding: 'utf-8',
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024
+    });
+    const stdout = (result.stdout || '').trim();
+    const stderr = (result.stderr || '').trim();
+    if (result.status === 0 && stdout.length > 0) {
+      return { ok: true, text: stdout, detail: `${command}` };
+    }
+    return {
+      ok: false,
+      text: '',
+      detail: stderr || stdout || `exit_${result.status}`
+    };
+  } catch (error) {
+    return { ok: false, text: '', detail: error.message };
+  }
+}
+
+function compressMemoryRecord(record, rawContent, targetAgentId) {
+  if (rawContent.trim().length <= 220 || !record) {
+    return rawContent.trim();
+  }
+
+  const prompt = buildCompressionPrompt(record, targetAgentId, rawContent);
+
+  const ollamaModel = discoverOllamaModel();
+  if (ollamaModel) {
+    const ollama = runModelCompression('ollama', ['run', ollamaModel, prompt], 180000);
+    if (ollama.ok) return ollama.text;
+  }
+
+  const gemini = runModelCompression('gemini', ['--prompt', prompt], 180000);
+  if (gemini.ok) return gemini.text;
+
+  const fallback = [
+    `### ${record.event || 'task_event'} · ${record.task_id || 'unknown'}`,
+    `- source: ${record.source_agent || 'unknown'}`,
+    `- task: ${record.task_intent || record.node_description || '未提供任务说明'}`,
+    record.error ? `- error: ${stringifyCompact(record.error)}` : null,
+    record.outputs && record.outputs.length > 0 ? `- outputs: ${stringifyCompact(record.outputs)}` : null,
+    `- 共享建议: 否`,
+    `- 归档说明: 模型压缩不可用，已回退到结构化摘要`
+  ].filter(Boolean).join('\n');
+
+  return fallback;
+}
+
+function resolveMemoryTargets(record, filename) {
+  const rawTargets = [];
+
+  if (record && Array.isArray(record.memory_targets)) {
+    rawTargets.push(...record.memory_targets);
+  } else if (record && typeof record.memory_targets === 'string') {
+    rawTargets.push(record.memory_targets);
+  }
+
+  if (record && record.source_agent) {
+    rawTargets.push(record.source_agent);
+  }
+
+  if (record && record.node_agent_id) {
+    rawTargets.push(record.node_agent_id);
+  }
+
+  if (rawTargets.length === 0) {
+    rawTargets.push(inferAgentId(filename));
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (const target of rawTargets) {
+    const resolved = normalizeAgentReference(target) || (target === 'shared' ? 'shared' : null);
+    if (!resolved || seen.has(resolved)) continue;
+    seen.add(resolved);
+    normalized.push(resolved);
+  }
+
+  return normalized.length > 0 ? normalized : ['shared'];
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -152,24 +369,10 @@ function inferAgentId(filename) {
 // 超过 MAX_MEMORY_LINES 时，滚动删除最早的条目（非硬性拒绝）
 // ═══════════════════════════════════════════════════════════════
 
-function appendToMemory(agentId, content, sourceFile) {
-  let memoryDir, memoryFile;
-
-  if (agentId === 'unknown') {
-    // 流浪记忆 → shared/memory/MEMORY.md
-    memoryDir = SHARED_MEMORY_DIR;
-    memoryFile = join(memoryDir, 'MEMORY.md');
-  } else {
-    const agentDir = join(AGENTS_DIR, agentId);
-    if (!existsSync(agentDir)) {
-      console.warn(`[REI] Agent 目录不存在: ${agentDir}，降级到 shared`);
-      memoryDir = SHARED_MEMORY_DIR;
-      memoryFile = join(memoryDir, 'MEMORY.md');
-    } else {
-      memoryDir = join(agentDir, 'memory');
-      memoryFile = join(memoryDir, 'MEMORY.md');
-    }
-  }
+function appendToMemory(agentRef, content, sourceFile) {
+  const resolved = resolveMemoryTargetDir(agentRef);
+  let memoryDir = resolved.memoryDir;
+  let memoryFile = join(memoryDir, 'MEMORY.md');
   ensureDir(memoryDir);
 
   const timestamp = new Date().toISOString().split('T')[0];
@@ -183,13 +386,13 @@ function appendToMemory(agentId, content, sourceFile) {
   try {
     let existingContent = existsSync(memoryFile)
       ? readFileSync(memoryFile, 'utf-8')
-      : `# ${agentId} 长期记忆\n`;
+      : `# ${resolved.label} 长期记忆\n`;
 
     let lines = (existingContent + newEntry).split('\n');
 
     // 滚动删除：超过上限时，保留标题行，整块删除最早的 Entry
     if (lines.length > MAX_MEMORY_LINES) {
-      console.warn(`[REI] ${agentId}/MEMORY.md 触发容量保护 (${lines.length}行)，滚动移除旧记忆...`);
+      console.warn(`[REI] ${resolved.label}/MEMORY.md 触发容量保护 (${lines.length}行)，滚动移除旧记忆...`);
       const header = lines[0];
       const dataLines = lines.slice(1);
       // 找到第一个 '---' 分割线，且位于溢出部分之后
@@ -265,12 +468,36 @@ async function main() {
 
         // Step 3: 读取 + 评估
         const content = readFileSync(readPath, 'utf-8');
-        const agentId = inferAgentId(filename);
-        const evaluation = evaluateValue(content, filename);
+        const parsed = parseQueueRecord(content);
+        const evaluation = parsed?.type === 'task_event'
+          ? { keep: true, reason: 'curated_memory_queue_record' }
+          : evaluateValue(content, filename);
 
         if (evaluation.keep) {
-          const appended = appendToMemory(agentId, content, filename);
-          if (appended) totalKept++;
+          const targets = resolveMemoryTargets(parsed, filename);
+          let sharedSuggested = false;
+          let appendedAny = false;
+
+          for (const targetRef of targets) {
+            const compressed = parsed
+              ? compressMemoryRecord(parsed, content, targetRef)
+              : content;
+            if (/共享建议[:：]\s*是/.test(compressed)) {
+              sharedSuggested = true;
+            }
+            const appended = appendToMemory(targetRef, compressed, filename);
+            appendedAny = appendedAny || appended;
+          }
+
+          if (sharedSuggested && !targets.includes('shared')) {
+            const sharedCompressed = parsed
+              ? compressMemoryRecord(parsed, content, 'shared')
+              : content;
+            const appended = appendToMemory('shared', sharedCompressed, filename);
+            appendedAny = appendedAny || appended;
+          }
+
+          if (appendedAny) totalKept++;
           else totalDiscarded++;
         } else {
           totalDiscarded++;

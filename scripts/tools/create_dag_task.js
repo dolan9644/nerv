@@ -18,13 +18,26 @@
  *   "initiator_id": "string (必填)",
  *   "intent": "string (必填)",
  *   "priority": "number 0-5 (可选，默认 0)",
- *   "nodes": [{ "node_id", "agent_id", "description", "depth?", "max_retries?" }],
+ *   "nodes": [{ "node_id", "agent_id", "description", "depth?", "max_retries?", "contract?" }],
  *   "edges": [{ "from": "node_id", "to": "node_id" }]
  * }
  */
 
 import { readFileSync, existsSync } from 'fs';
 import { createFullDag, closeDb } from '../db.js';
+
+const CONTRACT_VERSION = '1.0';
+const DISPATCH_MODES = new Set(['agent_session', 'tool_exec', 'approval_gate', 'human_input', 'cron_only']);
+const COMPLETION_MODES = new Set(['event_only', 'artifact_only', 'event_and_artifact', 'event_or_artifact', 'approval_only']);
+const ACCEPTED_EVENTS = new Set(['NODE_COMPLETED', 'NODE_FAILED', 'NODE_OBSERVED_DONE', 'NODE_OBSERVED_FAILED']);
+const ARTIFACT_MATCH_MODES = new Set(['all', 'any']);
+const RESULT_PATH_SOURCES = new Set(['first_required_artifact', 'first_optional_artifact', 'explicit_event_field']);
+const OBSERVATION_SOURCES = new Set(['session_event', 'artifact_fs', 'audit_log', 'approval_table', 'cron_health']);
+const DEDUPE_KEY_TEMPLATES = new Set([
+  'task_id:node_id:event',
+  'task_id:node_id:artifact',
+  'task_id:node_id:event:artifact'
+]);
 
 // ═══════════════════════════════════════════════════════════════
 // 补丁 A: 文件输入（杜绝 Bash 转义灾难）
@@ -116,6 +129,7 @@ function validateInput(input) {
       if (node.max_retries !== undefined && (typeof node.max_retries !== 'number' || node.max_retries < 0)) {
         errors.push(`nodes[${i}].max_retries 必须是 >= 0 的数字`);
       }
+      validateNodeContract(node, i, errors);
     });
   }
 
@@ -187,11 +201,153 @@ function validateInput(input) {
   }
 }
 
+function validateStringArray(value, label, errors, allowedValues = null) {
+  if (!Array.isArray(value)) {
+    errors.push(`${label} 必须是字符串数组`);
+    return;
+  }
+  value.forEach((item, index) => {
+    if (typeof item !== 'string' || item.trim().length === 0) {
+      errors.push(`${label}[${index}] 必须是非空字符串`);
+      return;
+    }
+    if (allowedValues && !allowedValues.has(item)) {
+      errors.push(`${label}[${index}] "${item}" 不在允许值中`);
+    }
+  });
+}
+
+function validateInteger(value, label, errors, min = 0) {
+  if (!Number.isInteger(value) || value < min) {
+    errors.push(`${label} 必须是 >= ${min} 的整数`);
+  }
+}
+
+function validateNodeContract(node, index, errors) {
+  if (node.contract === undefined) return;
+
+  const label = `nodes[${index}].contract`;
+  const contract = node.contract;
+
+  if (typeof contract !== 'object' || contract === null || Array.isArray(contract)) {
+    errors.push(`${label} 必须是 Object`);
+    return;
+  }
+
+  if (contract.version !== CONTRACT_VERSION) {
+    errors.push(`${label}.version 必须是 "${CONTRACT_VERSION}"`);
+  }
+
+  const dispatch = contract.dispatch_contract;
+  if (dispatch !== undefined) {
+    if (typeof dispatch !== 'object' || dispatch === null || Array.isArray(dispatch)) {
+      errors.push(`${label}.dispatch_contract 必须是 Object`);
+    } else {
+      if (dispatch.mode !== undefined && !DISPATCH_MODES.has(dispatch.mode)) {
+        errors.push(`${label}.dispatch_contract.mode "${dispatch.mode}" 非法`);
+      }
+      if (dispatch.target_agent !== undefined) {
+        if (typeof dispatch.target_agent !== 'string' || dispatch.target_agent.trim().length === 0) {
+          errors.push(`${label}.dispatch_contract.target_agent 必须是非空字符串`);
+        } else if (dispatch.target_agent !== node.agent_id) {
+          errors.push(`${label}.dispatch_contract.target_agent 必须与 agent_id 一致，避免调度漂移`);
+        }
+      }
+      if (dispatch.output_dir !== undefined && (typeof dispatch.output_dir !== 'string' || dispatch.output_dir.trim().length === 0)) {
+        errors.push(`${label}.dispatch_contract.output_dir 必须是非空字符串`);
+      }
+      if (dispatch.input_artifacts !== undefined) {
+        validateStringArray(dispatch.input_artifacts, `${label}.dispatch_contract.input_artifacts`, errors);
+      }
+      if (dispatch.notes !== undefined && typeof dispatch.notes !== 'string') {
+        errors.push(`${label}.dispatch_contract.notes 必须是字符串`);
+      }
+    }
+  }
+
+  const completion = contract.completion_contract;
+  if (typeof completion !== 'object' || completion === null || Array.isArray(completion)) {
+    errors.push(`${label}.completion_contract 必须存在且必须是 Object`);
+  } else {
+    if (!COMPLETION_MODES.has(completion.mode)) {
+      errors.push(`${label}.completion_contract.mode "${completion.mode}" 非法`);
+    }
+    if (completion.accepted_events !== undefined) {
+      validateStringArray(completion.accepted_events, `${label}.completion_contract.accepted_events`, errors, ACCEPTED_EVENTS);
+    }
+    if (completion.required_artifacts !== undefined) {
+      validateStringArray(completion.required_artifacts, `${label}.completion_contract.required_artifacts`, errors);
+    }
+    if (completion.optional_artifacts !== undefined) {
+      validateStringArray(completion.optional_artifacts, `${label}.completion_contract.optional_artifacts`, errors);
+    }
+    if (completion.artifact_match_mode !== undefined && !ARTIFACT_MATCH_MODES.has(completion.artifact_match_mode)) {
+      errors.push(`${label}.completion_contract.artifact_match_mode "${completion.artifact_match_mode}" 非法`);
+    }
+    if (completion.require_task_id_match !== undefined && typeof completion.require_task_id_match !== 'boolean') {
+      errors.push(`${label}.completion_contract.require_task_id_match 必须是布尔值`);
+    }
+    if (completion.require_node_id_match !== undefined && typeof completion.require_node_id_match !== 'boolean') {
+      errors.push(`${label}.completion_contract.require_node_id_match 必须是布尔值`);
+    }
+    if (completion.result_path_from !== undefined && !RESULT_PATH_SOURCES.has(completion.result_path_from)) {
+      errors.push(`${label}.completion_contract.result_path_from "${completion.result_path_from}" 非法`);
+    }
+
+    const requiresEvent = completion.mode === 'event_only' || completion.mode === 'event_and_artifact' || completion.mode === 'event_or_artifact';
+    const requiresArtifact = completion.mode === 'artifact_only' || completion.mode === 'event_and_artifact' || completion.mode === 'event_or_artifact';
+
+    if (requiresEvent && (!Array.isArray(completion.accepted_events) || completion.accepted_events.length === 0)) {
+      errors.push(`${label}.completion_contract.mode=${completion.mode} 时必须声明 accepted_events`);
+    }
+    if (requiresArtifact && (!Array.isArray(completion.required_artifacts) || completion.required_artifacts.length === 0)) {
+      errors.push(`${label}.completion_contract.mode=${completion.mode} 时必须声明 required_artifacts`);
+    }
+  }
+
+  const runtime = contract.runtime_contract;
+  if (runtime !== undefined) {
+    if (typeof runtime !== 'object' || runtime === null || Array.isArray(runtime)) {
+      errors.push(`${label}.runtime_contract 必须是 Object`);
+    } else {
+      if (runtime.timeout_seconds !== undefined) validateInteger(runtime.timeout_seconds, `${label}.runtime_contract.timeout_seconds`, errors, 1);
+      if (runtime.max_retries !== undefined) validateInteger(runtime.max_retries, `${label}.runtime_contract.max_retries`, errors, 0);
+      if (runtime.retry_backoff_seconds !== undefined) validateInteger(runtime.retry_backoff_seconds, `${label}.runtime_contract.retry_backoff_seconds`, errors, 0);
+      if (runtime.orphan_threshold_seconds !== undefined) validateInteger(runtime.orphan_threshold_seconds, `${label}.runtime_contract.orphan_threshold_seconds`, errors, 1);
+
+      if (runtime.max_retries !== undefined) {
+        if (node.max_retries === undefined) {
+          node.max_retries = runtime.max_retries;
+        } else if (node.max_retries !== runtime.max_retries) {
+          errors.push(`${label}.runtime_contract.max_retries 与 nodes[${index}].max_retries 不一致`);
+        }
+      }
+    }
+  }
+
+  const observation = contract.observation_contract;
+  if (observation !== undefined) {
+    if (typeof observation !== 'object' || observation === null || Array.isArray(observation)) {
+      errors.push(`${label}.observation_contract 必须是 Object`);
+    } else {
+      if (observation.sources !== undefined) {
+        validateStringArray(observation.sources, `${label}.observation_contract.sources`, errors, OBSERVATION_SOURCES);
+      }
+      if (observation.dedupe_key_template !== undefined && !DEDUPE_KEY_TEMPLATES.has(observation.dedupe_key_template)) {
+        errors.push(`${label}.observation_contract.dedupe_key_template "${observation.dedupe_key_template}" 非法`);
+      }
+      if (observation.artifact_root !== undefined && (typeof observation.artifact_root !== 'string' || observation.artifact_root.trim().length === 0)) {
+        errors.push(`${label}.observation_contract.artifact_root 必须是非空字符串`);
+      }
+    }
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 主执行逻辑（补丁 C: 使用 createFullDag 原子事务）
 // ═══════════════════════════════════════════════════════════════
 
-function main() {
+async function main() {
   let input;
 
   // 从文件读取（补丁 A）
@@ -212,7 +368,7 @@ function main() {
 
   // 原子事务写入（补丁 C）
   try {
-    const result = createFullDag({
+    const result = await createFullDag({
       taskId: input.task_id,
       initiatorId: input.initiator_id,
       intent: input.intent,
@@ -239,4 +395,11 @@ function main() {
   }
 }
 
-main();
+main().catch((e) => {
+  console.error(JSON.stringify({
+    success: false,
+    error: `【未捕获异常】${e.message}`
+  }));
+  closeDb();
+  process.exit(1);
+});

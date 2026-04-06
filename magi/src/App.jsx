@@ -12,10 +12,10 @@ import MagiTriad from './components/MagiTriad';
 import SeeleStone from './components/SeeleStone';
 
 export default function App() {
-  const { agents, connected, activeDag, approvalsPending, systemStats } = useAgentStatus();
+  const { agents, connected, activeDag, approvalsPending, systemStats, spear } = useAgentStatus();
   const { logs, addLog } = useLogs();
   const clock = useClock();
-  const heartbeat = useHeartbeat();
+  const heartbeat = useHeartbeat(spear);
   const { approvals } = useApprovals();
   const harnessStats = useHarnessStats();
   const { skills } = useSkills();

@@ -115,6 +115,13 @@ CREATE TABLE IF NOT EXISTS skill_registry (
   pattern         TEXT,                             -- URL 匹配正则，例如 '*.douyin.com/*'（discovered 类专用）
   source_type     TEXT DEFAULT 'native'             -- 'native'（原生内置）或 'discovered'（EVA-03 自动发现）
     CHECK(source_type IN ('native', 'discovered')),
+  load_source     TEXT DEFAULT 'managed',           -- bundled / managed / workspace / extra / plugin / discovered
+  source_priority INTEGER DEFAULT 0,                -- OpenClaw precedence: extra < bundled/plugin < managed < workspace
+  source_root     TEXT,                             -- 本次扫描命中的根目录
+  skill_key       TEXT,                             -- metadata.openclaw.skillKey 或 skill_name
+  gating_status   TEXT DEFAULT 'eligible',          -- eligible / disabled / gated
+  gating_reason   TEXT,                             -- JSON 字符串：被过滤或降级的原因
+  metadata_json   TEXT,                             -- metadata.openclaw 的原始 JSON
   adapter_path    TEXT,                             -- 适配器脚本路径（discovered 类专用）
   dockerfile_path TEXT,                             -- Docker 构建文件路径（discovered 类专用）
   last_used_at    INTEGER,                          -- 时间戳：最近一次被路由匹配使用
@@ -136,6 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_task         ON audit_logs(task_id);
 CREATE INDEX IF NOT EXISTS idx_audit_agent        ON audit_logs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created      ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_skill_source_type  ON skill_registry(source_type);
+CREATE INDEX IF NOT EXISTS idx_skill_load_source  ON skill_registry(load_source);
 CREATE INDEX IF NOT EXISTS idx_skill_last_used    ON skill_registry(last_used_at);
 
 -- ═══════════════════════════════════════════════════════════════

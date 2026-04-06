@@ -66,6 +66,7 @@
 ```json
 {
   "event": "DISPATCH",
+  "dispatch_id": "task_id:node_id:dispatch-001",
   "source": "nerv-ritsuko",
   "task_id": "uuid-string",
   "node_id": "uuid-string",
@@ -87,6 +88,7 @@
 ```json
 {
   "event": "NODE_COMPLETED | NODE_FAILED",
+  "dispatch_id": "从收到的 DISPATCH 原样回传",
   "source": "nerv-ritsuko",
   "task_id": "uuid-string",
   "node_id": "uuid-string",

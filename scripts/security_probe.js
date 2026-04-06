@@ -3,20 +3,54 @@
  *
  * 引入了 withRetry 防阻塞机制，收紧了白名单安全规则，精确到 Node 级审计关联。
  *
- * 用法：node scripts/security_probe.js [--window 30]
- * 输出：JSON { anomalies: [...], stats: {...} }
+ * 用法：node scripts/security_probe.js [--window 30] [--alert-dir <dir>]
+ * 输出：JSON { anomalies: [...], stats: {...}, alert_file?: "..." }
  */
 
-import { closeDb, withRetry } from './db.js';
+import { mkdirSync, writeFileSync } from 'fs';
+import { join, resolve } from 'path';
+import { closeDb, withRetry, writeAuditLog } from './db.js';
+
+function readArg(name, fallback = null) {
+  const prefix = `${name}=`;
+  const inline = process.argv.find((arg) => arg.startsWith(prefix));
+  if (inline) return inline.slice(prefix.length);
+  const idx = process.argv.indexOf(name);
+  if (idx !== -1 && process.argv[idx + 1]) return process.argv[idx + 1];
+  return fallback;
+}
 
 // 配置：默认检查过去 30 分钟
-const windowMinutes = parseInt(
-  process.argv.find(a => a.startsWith('--window'))?.split('=')[1]
-  || process.argv[process.argv.indexOf('--window') + 1]
-  || '30'
-);
+const windowMinutes = parseInt(readArg('--window', '30'));
+const alertDir = readArg('--alert-dir', process.env.NERV_SANDBOX_IO || null);
 
 const cutoffTs = Math.floor(Date.now() / 1000) - (windowMinutes * 60);
+
+function persistAlertFile(report) {
+  if (!alertDir || report.anomalies.length === 0) return null;
+  const absoluteDir = resolve(alertDir);
+  mkdirSync(absoluteDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filePath = join(absoluteDir, `seele_alert_${stamp}.json`);
+  writeFileSync(filePath, JSON.stringify(report, null, 2));
+  return filePath;
+}
+
+async function persistAuditAlerts(anomalies, alertFile) {
+  for (const anomaly of anomalies) {
+    if (!['HIGH', 'CRITICAL'].includes(anomaly.severity)) continue;
+    await writeAuditLog(
+      anomaly.task_id || null,
+      anomaly.node_id || null,
+      'seele',
+      'SECURITY_ALERT',
+      JSON.stringify({
+        ...anomaly,
+        alert_file: alertFile
+      })
+    );
+  }
+}
 
 async function runProbe() {
   try {
@@ -97,6 +131,7 @@ async function runProbe() {
         type: 'PATH_VIOLATION',
         severity: 'CRITICAL',
         task_id: row.task_id,
+        node_id: row.node_id,
         agent_id: row.agent_id,
         detail: (row.detail || '').slice(0, 200),
         timestamp: row.created_at
@@ -125,6 +160,14 @@ async function runProbe() {
         high_freq_agents: result.highFreq.length
       }
     };
+
+    const alertFile = persistAlertFile(report);
+    if (alertFile) {
+      report.alert_file = alertFile;
+    }
+    if (anomalies.length > 0) {
+      await persistAuditAlerts(anomalies, alertFile);
+    }
 
     console.log(JSON.stringify(report, null, 2));
 

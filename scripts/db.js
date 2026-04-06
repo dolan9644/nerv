@@ -75,6 +75,17 @@ function getDb() {
       // 当 init_db.sql 新增列后，旧数据库的表结构会落后。
       // 此处自动对齐：解析 init_db.sql 中的列定义，与实际表对比，补缺。
       migrateSchema(_db, initSql);
+      ensureRequiredColumns(_db, {
+        skill_registry: {
+          load_source: "TEXT DEFAULT 'managed'",
+          source_priority: 'INTEGER DEFAULT 0',
+          source_root: 'TEXT',
+          skill_key: 'TEXT',
+          gating_status: "TEXT DEFAULT 'eligible'",
+          gating_reason: 'TEXT',
+          metadata_json: 'TEXT'
+        }
+      });
     }
   }
   return _db;
@@ -140,6 +151,26 @@ function migrateSchema(db, initSql) {
 
   if (totalMigrated > 0) {
     console.log(`[NERV·DB] Schema 迁移完成: 共补充 ${totalMigrated} 列`);
+  }
+}
+
+function ensureRequiredColumns(db, tableColumnsMap) {
+  for (const [tableName, columns] of Object.entries(tableColumnsMap)) {
+    const existingCols = new Set(
+      db.prepare(`PRAGMA table_info(${tableName})`).all().map((row) => row.name)
+    );
+
+    for (const [columnName, columnDef] of Object.entries(columns)) {
+      if (existingCols.has(columnName)) continue;
+      try {
+        db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDef};`);
+        console.log(`[NERV·DB] Schema 对齐: ${tableName}.${columnName} 列已补充`);
+      } catch (err) {
+        if (!err.message.includes('duplicate column')) {
+          console.error(`[NERV·DB] Schema 对齐失败 ${tableName}.${columnName}: ${err.message}`);
+        }
+      }
+    }
   }
 }
 
@@ -458,12 +489,24 @@ async function getAuditLogs(taskId = null, limit = 100) {
 // ═══════════════════════════════════════════════════════════════
 
 async function upsertSkill(skillName, description, path, tags = [], compatibleAgents = [], opts = {}) {
-  const { pattern = null, source_type = 'native', adapter_path = null, dockerfile_path = null } = opts;
+  const {
+    pattern = null,
+    source_type = 'native',
+    load_source = source_type === 'discovered' ? 'discovered' : 'managed',
+    source_priority = 0,
+    source_root = null,
+    skill_key = skillName,
+    gating_status = 'eligible',
+    gating_reason = null,
+    metadata_json = null,
+    adapter_path = null,
+    dockerfile_path = null
+  } = opts;
   return withRetry((db) => {
     db.prepare(`
       INSERT INTO skill_registry 
-        (skill_name, description, path, tags, compatible_agents, pattern, source_type, adapter_path, dockerfile_path, scanned_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))
+        (skill_name, description, path, tags, compatible_agents, pattern, source_type, load_source, source_priority, source_root, skill_key, gating_status, gating_reason, metadata_json, adapter_path, dockerfile_path, scanned_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))
       ON CONFLICT(skill_name) DO UPDATE SET
         description = excluded.description,
         path = excluded.path,
@@ -471,11 +514,34 @@ async function upsertSkill(skillName, description, path, tags = [], compatibleAg
         compatible_agents = excluded.compatible_agents,
         pattern = excluded.pattern,
         source_type = excluded.source_type,
+        load_source = excluded.load_source,
+        source_priority = excluded.source_priority,
+        source_root = excluded.source_root,
+        skill_key = excluded.skill_key,
+        gating_status = excluded.gating_status,
+        gating_reason = excluded.gating_reason,
+        metadata_json = excluded.metadata_json,
         adapter_path = excluded.adapter_path,
         dockerfile_path = excluded.dockerfile_path,
         scanned_at = strftime('%s','now')
-    `).run(skillName, description, path, JSON.stringify(tags), JSON.stringify(compatibleAgents),
-           pattern, source_type, adapter_path, dockerfile_path);
+    `).run(
+      skillName,
+      description,
+      path,
+      JSON.stringify(tags),
+      JSON.stringify(compatibleAgents),
+      pattern,
+      source_type,
+      load_source,
+      source_priority,
+      source_root,
+      skill_key,
+      gating_status,
+      gating_reason,
+      metadata_json,
+      adapter_path,
+      dockerfile_path
+    );
   });
 }
 

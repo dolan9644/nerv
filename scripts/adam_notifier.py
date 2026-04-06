@@ -36,6 +36,7 @@ import urllib.request
 import argparse
 from datetime import datetime
 from pathlib import Path
+from nerv_paths import NERV_ROOT, get_nerv_db_path
 
 # ═══════════════════════════════════════════════════════════════
 # 环境加载
@@ -60,22 +61,9 @@ if _env_path.exists():
 # 配置
 # ═══════════════════════════════════════════════════════════════
 
-NERV_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+NERV_ROOT = str(NERV_ROOT)
 FEISHU_WEBHOOK = os.environ.get('FEISHU_WEBHOOK_URL', '')
-
-# DB 路径（仅 scan 模式需要）
-DB_PATH = os.environ.get('NERV_DB_PATH')
-if not DB_PATH:
-    for candidate in [
-        os.path.join(NERV_ROOT, 'data', 'db', 'nerv.db'),
-        os.path.join(NERV_ROOT, 'data', 'nerv.db'),
-        os.path.expanduser('~/.openclaw/nerv/data/db/nerv.db'),
-    ]:
-        if os.path.exists(candidate):
-            DB_PATH = candidate
-            break
-    else:
-        DB_PATH = os.path.join(NERV_ROOT, 'data', 'db', 'nerv.db')
+DB_PATH = get_nerv_db_path()
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.adam_last_notified_id')
 

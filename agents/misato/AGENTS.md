@@ -85,6 +85,7 @@
 {
   "source": "nerv-misato",
   "event": "DISPATCH|STATUS_CHECK|ABORT",
+  "dispatch_id": "task_id:node_id:dispatch-001",
   "task_id": "uuid",
   "node_id": "dag-node-uuid",
   "payload": {}
@@ -94,9 +95,10 @@
 ### 心跳（Spear 状态对齐）
 Gateway 每 5 分钟触发 HEARTBEAT.md：
 1. 执行 spear_sync.js 检查 RUNNING 节点
-2. 超过 10 分钟未更新 → sessions_send 确认
-3. retry_count >= 3 → CIRCUIT_BROKEN → 通知造物主
-4. 无异常 → HEARTBEAT_OK
+2. 先看 agents 表的 `status / current_task_id / last_heartbeat`
+3. 超过阈值的 RUNNING 节点只做异步探测，不要等待 callback
+4. retry_count >= 3 → CIRCUIT_BROKEN → 通知造物主
+5. 无异常 → HEARTBEAT_OK
 
 ## 可用 Skill
 - `nerv-dag-builder` — DAG 构建与验证
