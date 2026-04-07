@@ -98,18 +98,18 @@ const NERV_CRON_JOBS = [
     id: 'nerv-session-recorder',
     agentId: 'nerv-misato',
     name: 'NERV · Session 日志录入',
-    description: '每 5 分钟扫描 session 日志，提取任务记录写入 nerv.db + memory_queue',
+    description: '每 1 分钟扫描 session 日志，提取任务记录写入 nerv.db + memory_queue，并在节点完成后唤醒 Misato 续推 ready DAG 节点',
     enabled: true,
     schedule: {
       kind: 'cron',
-      expr: '*/5 * * * *',
+      expr: '* * * * *',
       tz: 'Asia/Shanghai'
     },
     sessionTarget: 'isolated',
     wakeMode: 'now',
     payload: {
       kind: 'agentTurn',
-      message: '静默执行 session 日志录入。执行: python3 ~/.openclaw/nerv/scripts/session_recorder.py。读取 JSON 输出并汇报扫描统计。',
+      message: '静默执行 session 日志录入。执行: python3 ~/.openclaw/nerv/scripts/session_recorder.py。读取 JSON 输出并汇报扫描统计；若有 orchestrator_wakes，说明本轮已触发 Misato 续推 ready 节点。',
       timeoutSeconds: 120
     },
     delivery: {

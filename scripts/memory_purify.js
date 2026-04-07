@@ -45,11 +45,15 @@ const IGNORED_QUEUE_PREFIXES = ['purify_report_'];
 const args = process.argv.slice(2);
 const BATCH_SIZE = parseInt(args[args.indexOf('--batch-size') + 1]) || 100;
 const DRY_RUN = args.includes('--dry-run');
+const JOB_STARTED_AT_MS = Date.now();
 
 // V8 内存安全阈值
 const MAX_FILE_SIZE = 1024 * 1024; // 1MB
 const MAX_MEMORY_LINES = 200;
 const MAX_COMPACT_INPUT_CHARS = 6000;
+const MODEL_TIMEOUT_MS = parseInt(process.env.NERV_MEMORY_MODEL_TIMEOUT_MS || '12000', 10);
+const REMOTE_MODEL_TIMEOUT_MS = parseInt(process.env.NERV_MEMORY_REMOTE_MODEL_TIMEOUT_MS || String(MODEL_TIMEOUT_MS), 10);
+const MAX_JOB_WALL_MS = parseInt(process.env.NERV_MEMORY_MAX_JOB_WALL_MS || '240000', 10);
 
 let cachedOllamaModel = null;
 
@@ -250,6 +254,14 @@ function runModelCompression(command, args, timeoutMs = 120000) {
   }
 }
 
+function remainingJobBudgetMs() {
+  return Math.max(0, MAX_JOB_WALL_MS - (Date.now() - JOB_STARTED_AT_MS));
+}
+
+function canSpendModelBudget(minimumMs = 3000) {
+  return remainingJobBudgetMs() >= minimumMs;
+}
+
 function compressMemoryRecord(record, rawContent, targetAgentId) {
   if (rawContent.trim().length <= 220 || !record) {
     return rawContent.trim();
@@ -258,13 +270,23 @@ function compressMemoryRecord(record, rawContent, targetAgentId) {
   const prompt = buildCompressionPrompt(record, targetAgentId, rawContent);
 
   const ollamaModel = discoverOllamaModel();
-  if (ollamaModel) {
-    const ollama = runModelCompression('ollama', ['run', ollamaModel, prompt], 180000);
+  if (ollamaModel && canSpendModelBudget()) {
+    const ollama = runModelCompression(
+      'ollama',
+      ['run', ollamaModel, prompt],
+      Math.min(MODEL_TIMEOUT_MS, remainingJobBudgetMs())
+    );
     if (ollama.ok) return ollama.text;
   }
 
-  const gemini = runModelCompression('gemini', ['--prompt', prompt], 180000);
-  if (gemini.ok) return gemini.text;
+  if (canSpendModelBudget()) {
+    const gemini = runModelCompression(
+      'gemini',
+      ['--prompt', prompt],
+      Math.min(REMOTE_MODEL_TIMEOUT_MS, remainingJobBudgetMs())
+    );
+    if (gemini.ok) return gemini.text;
+  }
 
   const fallback = [
     `### ${record.event || 'task_event'} · ${record.task_id || 'unknown'}`,
@@ -443,6 +465,12 @@ async function main() {
     console.log(`[REI] 第 ${batchNumber} 批 | ${batch.length} 个文件`);
 
     for (const filename of batch) {
+      if (remainingJobBudgetMs() <= 0) {
+        console.warn('[REI] 本次提纯任务达到墙钟时间预算，剩余文件留给下一批');
+        totalSkipped += (batch.length - batch.indexOf(filename));
+        break;
+      }
+
       const srcPath = join(QUEUE_DIR, filename);
       const procPath = join(PROCESSING_DIR, filename);
 

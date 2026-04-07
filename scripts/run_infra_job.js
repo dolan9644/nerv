@@ -98,7 +98,7 @@ function summarizeResult(stdout, stderr) {
 
   if (job.id === 'nerv-session-recorder') {
     return {
-      summary: `events_found=${parsed.events_found || 0}, recorded=${parsed.events_recorded || 0}`,
+      summary: `events_found=${parsed.events_found || 0}, recorded=${parsed.records_written || 0}, wakes=${(parsed.orchestrator_wakes || []).filter((item) => item.sent).length}`,
       metrics: parsed
     };
   }

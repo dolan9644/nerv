@@ -51,6 +51,11 @@ const IGNORED_DIRS = new Set([
 ]);
 
 // Agent → Skill 兼容性映射
+// 注意：
+// 1. compatible_agents 只表达“谁可以挂/用这个 skill pack”
+// 2. 它不表达“某个平台能力已经 ready”
+// 3. 对 commerce_operations / social_media，平台是否可执行还要看
+//    docs/platform-capability-catalog-v1.md 与 workflow template 的 capability_gate
 const AGENT_SKILL_MAP = {
   'nerv-publisher': ['nerv-gendo'],
   'nerv-code-runner': ['nerv-ritsuko', 'nerv-asuka', 'nerv-eva01'],
@@ -60,6 +65,10 @@ const AGENT_SKILL_MAP = {
   'nerv-obsidian': ['nerv-rei'],
   'nerv-search': ['nerv-eva03'],
   'nerv-github': ['nerv-ritsuko'],
+  'social-listening-pack': ['nerv-eva02', 'nerv-shinji'],
+  'platform-collector-pack': ['nerv-mari', 'nerv-shinji'],
+  'topic-ranking-pack': ['nerv-eva00', 'nerv-shinji'],
+  'social-copy-pack': ['nerv-eva13', 'nerv-shinji'],
   'duckduckgo-search': ['nerv-eva03', 'nerv-mari'],
   'openclaw-tavily-search': ['nerv-eva03'],
   'rss-fetcher': ['nerv-eva02'],
@@ -175,6 +184,20 @@ function parseSkillMd(filePath) {
   return result;
 }
 
+function parseCompatibleAgents(parsedSkill) {
+  const metadataAgents =
+    parsedSkill.metadata?.openclaw?.compatible_agents ||
+    parsedSkill.metadata?.openclaw?.compatibleAgents ||
+    parsedSkill.metadata?.compatible_agents ||
+    parsedSkill.metadata?.compatibleAgents;
+
+  if (Array.isArray(metadataAgents)) {
+    return metadataAgents.filter((item) => typeof item === 'string' && item.trim().length > 0);
+  }
+
+  return [];
+}
+
 function resolveConfig() {
   return readJson(OPENCLAW_CONFIG_PATH) || {};
 }
@@ -287,10 +310,10 @@ function findSkillDirs(rootPath) {
   return skillDirs.sort((a, b) => a.localeCompare(b));
 }
 
-function resolveSkillConfig(parsedSkill, config) {
+function resolveSkillConfig(parsedSkill, config, dirName) {
   const openclawMeta = parsedSkill.metadata?.openclaw ?? {};
   const skillName = parsedSkill.name;
-  const skillKey = openclawMeta.skillKey || skillName;
+  const skillKey = openclawMeta.skillKey || dirName || skillName;
   const entries = config.skills?.entries ?? {};
   const entryConfig = entries[skillKey] ?? entries[skillName] ?? {};
   return { openclawMeta, skillKey, entryConfig };
@@ -303,9 +326,9 @@ function envValueSatisfied(varName, openclawMeta, entryConfig) {
   return false;
 }
 
-function evaluateEligibility(parsedSkill, rootInfo, config) {
+function evaluateEligibility(parsedSkill, rootInfo, config, dirName) {
   const reasons = [];
-  const { openclawMeta, skillKey, entryConfig } = resolveSkillConfig(parsedSkill, config);
+  const { openclawMeta, skillKey, entryConfig } = resolveSkillConfig(parsedSkill, config, dirName);
   const requires = openclawMeta.requires ?? {};
 
   if (entryConfig?.enabled === false) {
@@ -386,7 +409,8 @@ function buildCandidate(skillDir, rootInfo, config) {
   const dirName = basename(skillDir);
   const skillName = parsed.name || dirName;
   parsed.name = skillName;
-  const { status, reasons, skillKey, openclawMeta } = evaluateEligibility(parsed, rootInfo, config);
+  const { status, reasons, skillKey, openclawMeta } = evaluateEligibility(parsed, rootInfo, config, dirName);
+  const explicitCompatibleAgents = parseCompatibleAgents(parsed);
 
   return {
     skill_name: skillName,
@@ -394,7 +418,9 @@ function buildCandidate(skillDir, rootInfo, config) {
     description: parsed.description || '',
     path: skillDir,
     tags: parsed.tags || [],
-    compatible_agents: buildCompatibleAgents(skillName, skillKey, dirName),
+    compatible_agents: explicitCompatibleAgents.length > 0
+      ? explicitCompatibleAgents
+      : buildCompatibleAgents(skillName, skillKey, dirName),
     source_type: 'native',
     load_source: rootInfo.load_source,
     source_priority: rootInfo.source_priority,

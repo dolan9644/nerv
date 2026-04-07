@@ -18,6 +18,9 @@
  *   "initiator_id": "string (必填)",
  *   "intent": "string (必填)",
  *   "priority": "number 0-5 (可选，默认 0)",
+ *   "orchestrator_agent_id": "string (可选，默认 nerv-misato)",
+ *   "orchestrator_session_key": "string (可选)",
+ *   "session_strategy": "main | task_scoped (可选，默认 task_scoped)",
  *   "nodes": [{ "node_id", "agent_id", "description", "depth?", "max_retries?", "contract?" }],
  *   "edges": [{ "from": "node_id", "to": "node_id" }]
  * }
@@ -27,6 +30,7 @@ import { readFileSync, existsSync } from 'fs';
 import { createFullDag, closeDb } from '../db.js';
 
 const CONTRACT_VERSION = '1.0';
+const SESSION_STRATEGIES = new Set(['main', 'task_scoped']);
 const DISPATCH_MODES = new Set(['agent_session', 'tool_exec', 'approval_gate', 'human_input', 'cron_only']);
 const COMPLETION_MODES = new Set(['event_only', 'artifact_only', 'event_and_artifact', 'event_or_artifact', 'approval_only']);
 const ACCEPTED_EVENTS = new Set(['NODE_COMPLETED', 'NODE_FAILED', 'NODE_OBSERVED_DONE', 'NODE_OBSERVED_FAILED']);
@@ -96,6 +100,15 @@ function validateInput(input) {
       errors.push('priority 必须是 0-5 之间的整数');
     }
   }
+  if (input.orchestrator_agent_id !== undefined && (typeof input.orchestrator_agent_id !== 'string' || input.orchestrator_agent_id.trim().length === 0)) {
+    errors.push('orchestrator_agent_id 必须是非空字符串');
+  }
+  if (input.orchestrator_session_key !== undefined && (typeof input.orchestrator_session_key !== 'string' || input.orchestrator_session_key.trim().length === 0)) {
+    errors.push('orchestrator_session_key 必须是非空字符串');
+  }
+  if (input.session_strategy !== undefined && !SESSION_STRATEGIES.has(input.session_strategy)) {
+    errors.push('session_strategy 只能是 "main" 或 "task_scoped"');
+  }
 
   // nodes 校验
   if (!Array.isArray(input.nodes)) {
@@ -128,6 +141,9 @@ function validateInput(input) {
       }
       if (node.max_retries !== undefined && (typeof node.max_retries !== 'number' || node.max_retries < 0)) {
         errors.push(`nodes[${i}].max_retries 必须是 >= 0 的数字`);
+      }
+      if (node.session_key !== undefined && (typeof node.session_key !== 'string' || node.session_key.trim().length === 0)) {
+        errors.push(`nodes[${i}].session_key 必须是非空字符串`);
       }
       validateNodeContract(node, i, errors);
     });
@@ -343,6 +359,24 @@ function validateNodeContract(node, index, errors) {
   }
 }
 
+function buildEntryDispatches(workerSessions, nodeDefs, edges, sessionStrategy) {
+  const downstreamTargets = new Set((edges || []).map((edge) => edge.to));
+  const nodeMap = new Map((nodeDefs || []).map((node) => [node.node_id, node]));
+  return (workerSessions || [])
+    .filter((binding) => !downstreamTargets.has(binding.node_id))
+    .map((binding) => {
+      const node = nodeMap.get(binding.node_id) || {};
+      return {
+        node_id: binding.node_id,
+        agent_id: binding.agent_id,
+        description: node.description || '',
+        session_key: binding.session_key || null,
+        session_scope: binding.session_scope || 'main',
+        session_strategy: sessionStrategy
+      };
+    });
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 主执行逻辑（补丁 C: 使用 createFullDag 原子事务）
 // ═══════════════════════════════════════════════════════════════
@@ -373,6 +407,9 @@ async function main() {
       initiatorId: input.initiator_id,
       intent: input.intent,
       priority: input.priority ?? 0,
+      orchestratorAgentId: input.orchestrator_agent_id || 'nerv-misato',
+      orchestratorSessionKey: input.orchestrator_session_key || null,
+      sessionStrategy: input.session_strategy || 'task_scoped',
       nodes: input.nodes,
       edges: input.edges || []
     });
@@ -381,7 +418,11 @@ async function main() {
       success: true,
       task_id: result.taskId,
       nodes_created: result.nodesCreated,
-      edges_created: result.edgesCreated
+      edges_created: result.edgesCreated,
+      orchestrator_session_key: result.orchestratorSessionKey,
+      session_strategy: result.sessionStrategy,
+      worker_sessions: result.workerSessions,
+      entry_dispatches: buildEntryDispatches(result.workerSessions, input.nodes, input.edges || [], result.sessionStrategy)
     }));
 
   } catch (e) {

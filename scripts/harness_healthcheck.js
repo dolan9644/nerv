@@ -45,6 +45,22 @@ const DB_CANDIDATES = [
 ];
 
 const issues = [];
+const REQUIRED_WORKFLOW_ASSETS = {
+  workflow_templates: [
+    join(NERV_ROOT, 'workflow-templates', 'commerce_operations', 'live_commerce', 'live-session-script.template.json'),
+    join(NERV_ROOT, 'workflow-templates', 'commerce_operations', 'live_commerce', 'live-replay-summary.template.json'),
+    join(NERV_ROOT, 'workflow-templates', 'commerce_operations', 'ecommerce_ops', 'product-review-insight.template.json'),
+    join(NERV_ROOT, 'workflow-templates', 'project_ops', 'meeting-to-task.template.json'),
+    join(NERV_ROOT, 'workflow-templates', 'finance_info', 'finance-brief.template.json')
+  ],
+  misato_workflow_skills: [
+    join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'live-session-script', 'SKILL.md'),
+    join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'live-replay-summary', 'SKILL.md'),
+    join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'product-review-insight', 'SKILL.md'),
+    join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'meeting-to-task', 'SKILL.md'),
+    join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'finance-brief', 'SKILL.md')
+  ]
+};
 
 function addIssue(severity, code, message, details = {}) {
   issues.push({ severity, code, message, details });
@@ -457,9 +473,99 @@ function collectDatabaseHealth() {
     const nodeRows = db.prepare('SELECT status, COUNT(*) AS count FROM dag_nodes GROUP BY status').all();
     const pendingApprovals = db.prepare('SELECT COUNT(*) AS count FROM pending_approvals').get().count;
     const skillRegistry = db.prepare('SELECT COUNT(*) AS count FROM skill_registry').get().count;
+    const taskColumns = db.prepare(`PRAGMA table_info(tasks)`).all();
+    const nodeColumns = db.prepare(`PRAGMA table_info(dag_nodes)`).all();
     const skillRegistryColumns = db.prepare(`PRAGMA table_info(skill_registry)`).all();
+    const taskColumnNames = new Set(taskColumns.map((row) => row.name));
+    const nodeColumnNames = new Set(nodeColumns.map((row) => row.name));
     const skillColumnNames = new Set(skillRegistryColumns.map((row) => row.name));
     const tasksWithoutDagJson = db.prepare("SELECT COUNT(*) AS count FROM tasks WHERE dag_json IS NULL OR dag_json = ''").get().count;
+    const taskSessionBindingsExists = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM sqlite_master
+      WHERE type = 'table' AND name = 'task_session_bindings'
+    `).get().count > 0;
+    const taskSessionBindingsCount = taskSessionBindingsExists
+      ? db.prepare('SELECT COUNT(*) AS count FROM task_session_bindings').get().count
+      : 0;
+    const orphanTaskSessionBindings = taskSessionBindingsExists
+      ? db.prepare(`
+          SELECT COUNT(*) AS count
+          FROM task_session_bindings ts
+          LEFT JOIN tasks t ON t.task_id = ts.task_id
+          WHERE t.task_id IS NULL
+        `).get().count
+      : 0;
+    const tasksWithoutOrchestratorSession =
+      taskColumnNames.has('orchestrator_session_key')
+        ? db.prepare(`
+            SELECT COUNT(*) AS count
+            FROM tasks
+            WHERE status IN ('PENDING', 'RUNNING', 'PAUSED')
+              AND (orchestrator_session_key IS NULL OR orchestrator_session_key = '')
+          `).get().count
+        : null;
+    const taskScopedNodesWithoutSession =
+      nodeColumnNames.has('session_scope') && nodeColumnNames.has('session_key')
+        ? db.prepare(`
+            SELECT COUNT(*) AS count
+            FROM dag_nodes
+            WHERE status IN ('PENDING', 'RUNNING')
+              AND session_scope = 'task'
+              AND (session_key IS NULL OR session_key = '')
+          `).get().count
+        : null;
+    const taskScopedDispatchesViaMain =
+      taskColumnNames.has('session_strategy') && taskColumnNames.has('dag_json') && nodeColumnNames.has('session_key')
+        ? (() => {
+            let count = 0;
+            const examples = [];
+            const rows = db.prepare(`
+              SELECT t.task_id, t.session_strategy, t.dag_json, dn.node_id, dn.agent_id, dn.status, dn.session_key, dn.session_scope
+              FROM tasks t
+              JOIN dag_nodes dn ON dn.task_id = t.task_id
+              WHERE t.session_strategy = 'task_scoped'
+                AND dn.status IN ('PENDING', 'RUNNING', 'DONE', 'FAILED', 'BLOCKED')
+            `).all();
+            for (const row of rows) {
+              let plannedSessionKey = null;
+              try {
+                const dag = JSON.parse(row.dag_json || '{}');
+                const nodeDef = Array.isArray(dag.nodes) ? dag.nodes.find((n) => n.node_id === row.node_id) : null;
+                plannedSessionKey = nodeDef?.session_key || null;
+              } catch {}
+              if (!plannedSessionKey || !plannedSessionKey.includes(`:task:${row.task_id}`)) continue;
+              if (row.session_key && row.session_key.endsWith(':main')) {
+                count += 1;
+                if (examples.length < 10) {
+                  examples.push({
+                    task_id: row.task_id,
+                    node_id: row.node_id,
+                    agent_id: row.agent_id,
+                    planned_session_key: plannedSessionKey,
+                    actual_session_key: row.session_key,
+                    status: row.status
+                  });
+                }
+              }
+            }
+            return { count, examples };
+          })()
+        : null;
+    const taskStrategyRows =
+      taskColumnNames.has('session_strategy')
+        ? db.prepare(`
+            SELECT session_strategy, COUNT(*) AS count
+            FROM tasks
+            GROUP BY session_strategy
+            ORDER BY session_strategy
+          `).all()
+        : [];
+    const totalTasks = taskRows.reduce((sum, row) => sum + (row.count || 0), 0);
+    const totalTaskScopedTasks = taskStrategyRows.reduce(
+      (sum, row) => sum + ((row.session_strategy === 'task_scoped') ? row.count : 0),
+      0
+    );
     const staleTasks = db.prepare(`
       SELECT task_id, status, updated_at
       FROM tasks
@@ -483,7 +589,8 @@ function collectDatabaseHealth() {
     const activeAgentRows = agentRows.filter((row) => row.status !== 'IDLE' || row.current_task_id != null);
     const agentsWithoutHeartbeat = activeAgentRows.filter((row) => row.last_heartbeat == null);
     const agentsRunningWithoutTask = agentRows.filter((row) => row.status === 'RUNNING' && !row.current_task_id);
-    const blockedNodeAgentsWithoutHeartbeat = blockedNodes.filter((node) => {
+    const runtimeCriticalNodes = blockedNodes.filter((node) => node.status === 'RUNNING');
+    const blockedNodeAgentsWithoutHeartbeat = runtimeCriticalNodes.filter((node) => {
       const agent = agentRows.find((row) => row.agent_id === node.agent_id);
       return !agent || agent.last_heartbeat == null;
     });
@@ -504,6 +611,54 @@ function collectDatabaseHealth() {
         code: 'TASKS_WITHOUT_DAG_JSON',
         message: '存在缺少 dag_json 的任务，说明一部分任务状态来自补录而非实时结构化建图',
         details: { count: tasksWithoutDagJson }
+      });
+    }
+
+    if (tasksWithoutOrchestratorSession && tasksWithoutOrchestratorSession > 0) {
+      localIssues.push({
+        severity: 'WARN',
+        code: 'TASKS_WITHOUT_ORCHESTRATOR_SESSION',
+        message: '存在活跃任务缺少 orchestrator_session_key，跨天恢复将退化为靠审计日志和产物猜测',
+        details: { count: tasksWithoutOrchestratorSession }
+      });
+    }
+
+    if (taskScopedNodesWithoutSession && taskScopedNodesWithoutSession > 0) {
+      localIssues.push({
+        severity: 'WARN',
+        code: 'TASK_SCOPED_NODE_WITHOUT_SESSION',
+        message: '存在声明为 task-scoped 的活跃节点缺少 session_key，task-scoped 隔离未真正落地',
+        details: { count: taskScopedNodesWithoutSession }
+      });
+    }
+
+    if (taskScopedDispatchesViaMain && taskScopedDispatchesViaMain.count > 0) {
+      localIssues.push({
+        severity: 'WARN',
+        code: 'TASK_SCOPED_DISPATCH_VIA_MAIN',
+        message: '存在声明为 task-scoped 的任务节点，但实际 dispatch 仍落到 main session，隔离只在设计层生效',
+        details: {
+          count: taskScopedDispatchesViaMain.count,
+          examples: taskScopedDispatchesViaMain.examples
+        }
+      });
+    }
+
+    if (taskColumnNames.has('session_strategy') && taskSessionBindingsExists && taskSessionBindingsCount === 0 && (totalTasks > 0 || totalTaskScopedTasks > 0)) {
+      localIssues.push({
+        severity: 'WARN',
+        code: 'TASK_SESSION_BINDINGS_EMPTY',
+        message: 'session 映射表存在但为空，说明 task/session 映射尚未真正进入控制面',
+        details: { count: taskSessionBindingsCount }
+      });
+    }
+
+    if (orphanTaskSessionBindings > 0) {
+      localIssues.push({
+        severity: 'WARN',
+        code: 'ORPHAN_TASK_SESSION_BINDINGS',
+        message: '存在 session 映射但对应 task 已不存在，控制面出现漂移',
+        details: { count: orphanTaskSessionBindings }
       });
     }
 
@@ -555,7 +710,19 @@ function collectDatabaseHealth() {
         dag_nodes: Object.fromEntries(nodeRows.map((row) => [row.status, row.count])),
         pending_approvals: pendingApprovals,
         skill_registry: skillRegistry,
-        agents: agentRows.length
+        agents: agentRows.length,
+        task_session_bindings: taskSessionBindingsCount
+      },
+      task_session_meta: {
+        task_columns: Array.from(taskColumnNames),
+        dag_node_columns: Array.from(nodeColumnNames),
+        session_strategies: Object.fromEntries(taskStrategyRows.map((row) => [row.session_strategy || 'unknown', row.count])),
+        total_tasks: totalTasks,
+        total_task_scoped_tasks: totalTaskScopedTasks,
+        orphan_task_session_bindings: orphanTaskSessionBindings,
+        tasks_without_orchestrator_session: tasksWithoutOrchestratorSession,
+        task_scoped_nodes_without_session: taskScopedNodesWithoutSession,
+        task_scoped_dispatches_via_main: taskScopedDispatchesViaMain?.count ?? null
       },
       skill_registry_meta: {
         columns: Array.from(skillColumnNames),
@@ -638,6 +805,8 @@ function collectSkillHealth(databaseSummary) {
   const localIssues = [];
   const scannerPath = join(__dirname, 'skill_scanner.js');
   const content = readFileSync(scannerPath, 'utf-8');
+  const configPath = join(OPENCLAW_ROOT, 'openclaw.json');
+  const config = safeReadJson(configPath) ?? {};
   const hasMultiSourceDiscovery =
     content.includes('BUNDLED_SKILLS_DIR') &&
     content.includes('WORKSPACE_SKILLS_DIR') &&
@@ -645,6 +814,11 @@ function collectSkillHealth(databaseSummary) {
     content.includes('openclaw.plugin.json');
   const registryMeta = databaseSummary?.summary?.skill_registry_meta ?? {};
   const sourceBreakdown = databaseSummary?.summary?.skill_registry_sources ?? null;
+  const configuredExtraDirs = Array.isArray(config.skills?.load?.extraDirs) ? config.skills.load.extraDirs : [];
+  const requiredNervExtraDirs = [
+    join(NERV_ROOT, 'skills'),
+    join(NERV_ROOT, 'agents', 'misato', 'SKILLS')
+  ].filter((dir) => existsSync(dir));
 
   if (!hasMultiSourceDiscovery) {
     localIssues.push({
@@ -671,10 +845,70 @@ function collectSkillHealth(databaseSummary) {
     });
   }
 
+  const missingExtraDirs = requiredNervExtraDirs.filter((dir) => !configuredExtraDirs.includes(dir));
+  if (missingExtraDirs.length > 0) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'SKILL_EXTRA_DIR_MISSING',
+      message: 'OpenClaw 运行时未完整挂载 NERV 自定义 skill 目录，workflow/pack 可能无法被原生发现',
+      details: { missing_extra_dirs: missingExtraDirs }
+    });
+  }
+
+  const activeDbPath = databaseSummary?.summary?.active_db_path;
+  if (activeDbPath && existsSync(activeDbPath)) {
+    const db = openDb(activeDbPath);
+    if (db) {
+      try {
+        const registered = new Set(
+          db.prepare(`SELECT skill_name, COALESCE(NULLIF(skill_key, ''), skill_name) AS skill_key FROM skill_registry`).all()
+            .flatMap((row) => [row.skill_name, row.skill_key].filter(Boolean))
+        );
+
+        const agentDeclaredSkills = new Set(
+          (config.agents?.list ?? [])
+            .filter((agent) => String(agent.id || '').startsWith('nerv-'))
+            .flatMap((agent) => Array.isArray(agent.skills) ? agent.skills : [])
+            .filter((skill) => typeof skill === 'string' && skill.trim().length > 0)
+        );
+
+        const configDeclaredSkills = new Set(
+          Object.entries(config.skills?.entries ?? {})
+            .filter(([, entry]) => entry?.enabled !== false)
+            .map(([name]) => name)
+        );
+
+        const missingAgentSkills = [...agentDeclaredSkills].filter((skill) => !registered.has(skill));
+        const missingConfigSkills = [...configDeclaredSkills].filter((skill) => !registered.has(skill));
+
+        if (missingAgentSkills.length > 0) {
+          localIssues.push({
+            severity: 'WARN',
+            code: 'DECLARED_AGENT_SKILL_MISSING',
+            message: '存在 Agent 声明的 skill 在当前 registry 中没有真实可发现实体',
+            details: { missing_agent_skills: missingAgentSkills }
+          });
+        }
+
+        if (missingConfigSkills.length > 0) {
+          localIssues.push({
+            severity: 'WARN',
+            code: 'DECLARED_CONFIG_SKILL_MISSING',
+            message: '存在 openclaw.json skills.entries 声明的 skill 在当前 registry 中没有真实可发现实体',
+            details: { missing_config_skills: missingConfigSkills }
+          });
+        }
+      } finally {
+        db.close();
+      }
+    }
+  }
+
   return {
     status: computeStatus(localIssues),
     skill_registry_count: databaseSummary?.summary?.tables?.skill_registry ?? null,
     skill_registry_sources: sourceBreakdown,
+    configured_extra_dirs: configuredExtraDirs,
     scanner_path: scannerPath,
     issues: localIssues
   };
@@ -735,7 +969,9 @@ function collectContractReadiness() {
   const dbScript = readFileSync(dbPath, 'utf-8');
 
   const supportsExtraNodeFields = !createDagTask.includes('additionalProperties: false');
-  const storesDagJson = dbScript.includes('const dagJson = JSON.stringify({ nodes, edges })');
+  const storesDagJson =
+    dbScript.includes('const dagJson = JSON.stringify({ nodes: enrichedNodes, edges })') ||
+    dbScript.includes('const dagJson = JSON.stringify({ nodes, edges })');
 
   if (!supportsExtraNodeFields || !storesDagJson) {
     localIssues.push({
@@ -759,6 +995,34 @@ function collectContractReadiness() {
   };
 }
 
+function collectWorkflowAssetHealth() {
+  const localIssues = [];
+  const groups = {};
+
+  for (const [group, paths] of Object.entries(REQUIRED_WORKFLOW_ASSETS)) {
+    const missing = paths.filter((targetPath) => !existsSync(targetPath));
+    groups[group] = {
+      required: paths.length,
+      present: paths.length - missing.length,
+      missing
+    };
+    if (missing.length > 0) {
+      localIssues.push({
+        severity: 'WARN',
+        code: 'WORKFLOW_ASSET_MISSING',
+        message: `第一批正式 workflow 资产缺失: ${group}`,
+        details: { missing }
+      });
+    }
+  }
+
+  return {
+    status: computeStatus(localIssues),
+    groups,
+    issues: localIssues
+  };
+}
+
 function main() {
   const cron = collectCronHealth();
   const config = collectConfigHealth();
@@ -767,6 +1031,7 @@ function main() {
   const skills = collectSkillHealth(database);
   const feishu = collectFeishuHealth(config);
   const contract = collectContractReadiness();
+  const workflowAssets = collectWorkflowAssetHealth();
 
   const allIssues = [
     ...cron.issues,
@@ -775,7 +1040,8 @@ function main() {
     ...recorder.issues,
     ...skills.issues,
     ...feishu.issues,
-    ...contract.issues
+    ...contract.issues,
+    ...workflowAssets.issues
   ];
   for (const issue of allIssues) issues.push(issue);
 
@@ -790,6 +1056,7 @@ function main() {
       critical: issues.filter((issue) => issue.severity === 'CRITICAL').length,
       warn: issues.filter((issue) => issue.severity === 'WARN').length,
       ok_checks: [cron, config, database, recorder, skills, feishu, contract].filter((check) => check.status === 'OK').length
+        + (workflowAssets.status === 'OK' ? 1 : 0)
     },
     checks: {
       cron,
@@ -798,7 +1065,8 @@ function main() {
       recorder,
       skills,
       feishu,
-      contract
+      contract,
+      workflow_assets: workflowAssets
     },
     issues
   };

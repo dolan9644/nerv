@@ -1,0 +1,83 @@
+{
+  "template_id": "finance-brief",
+  "version": "1.0",
+  "domain": "finance_info",
+  "summary": "财讯简报流：基于 RSS、手工新闻项或观察名单变化生成信息服务简报和风险卡片。",
+  "routing_hint": "dag",
+  "session_strategy": "task_scoped",
+  "execution_modes": ["signal_only", "manual_facts_first"],
+  "default_execution_mode": "signal_only",
+  "inputs": {
+    "required": ["brief_scope", "signal_source", "output_goal"],
+    "optional": ["time_window", "audience_profile", "must_include", "must_avoid", "compliance_notes", "manual_company_facts", "manual_watch_notes"],
+    "schema_ref": "docs/finance-brief-spec-v1.md"
+  },
+  "platform_requirements": "rss_or_ingested_signal",
+  "capability_gate": {
+    "missing_required_inputs_behavior": "tool_gap",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "missing_finance_inputs",
+    "manual_facts_can_skip_signal_supplement": true
+  },
+  "delivery": {
+    "final_owner": "nerv-misato",
+    "notifier": "adam_notifier",
+    "memory_writeback": false
+  },
+  "acceptance": {
+    "watch_requires_sources_and_timestamps": true,
+    "brief_requires_non_advisory_language": true,
+    "risk_cards_are_optional": true
+  },
+  "planned_nodes": [
+    {
+      "node_id": "watch-market-signals",
+      "family": "monitor",
+      "canonical_owner": "nerv-eva02",
+      "description": "读取 RSS 或已接入信号，整理重要变化。",
+      "input_artifacts": ["manual_input.json"],
+      "output_artifact": "watch.json",
+      "optional": true
+    },
+    {
+      "node_id": "supplement-finance-evidence",
+      "family": "search",
+      "canonical_owner": "nerv-eva03",
+      "description": "在必要时补充公开证据和背景信息。",
+      "input_artifact": "watch.json",
+      "output_artifact": "evidence.json",
+      "optional": true
+    },
+    {
+      "node_id": "rank-finance-signals",
+      "family": "normalize",
+      "canonical_owner": "nerv-eva00",
+      "description": "去重、排序并按主题分类重要变化。",
+      "input_artifacts": ["watch.json", "evidence.json"],
+      "output_artifact": "ranked.json"
+    },
+    {
+      "node_id": "compose-finance-brief",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "生成财讯简报和风险卡片，不提供交易建议。",
+      "input_artifact": "ranked.json",
+      "output_artifacts": ["finance_brief.md", "risk_cards.md"]
+    },
+    {
+      "node_id": "notify-finance-brief",
+      "family": "notify",
+      "canonical_owner": "nerv-misato",
+      "description": "通过 Adam Notifier 交付财讯简报。",
+      "input_artifacts": ["finance_brief.md", "risk_cards.md"],
+      "output_artifact": "sent.json"
+    }
+  ],
+  "edges": [
+    { "from": "watch-market-signals", "to": "supplement-finance-evidence" },
+    { "from": "watch-market-signals", "to": "rank-finance-signals" },
+    { "from": "supplement-finance-evidence", "to": "rank-finance-signals" },
+    { "from": "rank-finance-signals", "to": "compose-finance-brief" },
+    { "from": "compose-finance-brief", "to": "notify-finance-brief" }
+  ]
+}

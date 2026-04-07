@@ -1,0 +1,73 @@
+{
+  "template_id": "social-copy-studio",
+  "version": "1.0",
+  "domain": "commerce_operations",
+  "subdomain": "social_media",
+  "summary": "社媒内容工厂流：基于人工 brief 生成微博/小红书/抖音文案、视频脚本或口播稿。",
+  "routing_hint": "dag",
+  "session_strategy": "task_scoped",
+  "execution_modes": ["manual_brief"],
+  "default_execution_mode": "manual_brief",
+  "inputs": {
+    "required": ["content_type", "target_platform", "content_goal", "audience_profile", "style_profile", "key_points"],
+    "optional": ["product_or_topic_context", "reference_materials", "format_constraints", "must_include", "must_avoid", "compliance_notes", "asset_context"],
+    "schema_ref": "docs/social-copy-pack-spec-v1.md"
+  },
+  "platform_requirements": "not_applicable_for_manual_brief",
+  "capability_gate": {
+    "missing_required_inputs_behavior": "tool_gap",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "missing_copy_brief_inputs"
+  },
+  "delivery": {
+    "final_owner": "nerv-misato",
+    "notifier": "adam_notifier",
+    "memory_writeback": true
+  },
+  "acceptance": {
+    "brief_requires_message_hierarchy": true,
+    "copy_requires_platform_specific_voice": true,
+    "script_requires_callable_cta": true,
+    "voiceover_requires_spoken_language": true
+  },
+  "planned_nodes": [
+    {
+      "node_id": "normalize-brief",
+      "family": "normalize",
+      "canonical_owner": "nerv-eva00",
+      "description": "把目标、受众、风格、关键信息整理成可成稿的 copy_brief。",
+      "input_artifacts": ["manual_input.json"],
+      "output_artifact": "copy_brief.json"
+    },
+    {
+      "node_id": "compose-copy",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "按内容类型生成平台短文案、视频脚本或口播稿。",
+      "input_artifact": "copy_brief.json",
+      "output_artifacts": ["post_copy.md", "title_options.md", "video_script.md", "voiceover_script.md"]
+    },
+    {
+      "node_id": "notify-copy",
+      "family": "notify",
+      "canonical_owner": "nerv-misato",
+      "description": "读取内容包并通过 Adam Notifier 交付。",
+      "input_artifacts": ["post_copy.md", "title_options.md", "video_script.md", "voiceover_script.md"],
+      "output_artifact": "sent.json"
+    },
+    {
+      "node_id": "memory-copy-pattern",
+      "family": "memory",
+      "canonical_owner": "nerv-rei",
+      "description": "异步提纯平台语感、开头钩子和 CTA 套路。",
+      "input_artifacts": ["copy_brief.json", "post_copy.md", "video_script.md", "voiceover_script.md"],
+      "output_artifact": "memory_note.json",
+      "optional": true
+    }
+  ],
+  "edges": [
+    { "from": "normalize-brief", "to": "compose-copy" },
+    { "from": "compose-copy", "to": "notify-copy" },
+    { "from": "notify-copy", "to": "memory-copy-pattern" }
+  ]
+}

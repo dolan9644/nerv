@@ -2,14 +2,29 @@
 
 ## sessions_send 格式
 
-sessionKey 格式: `agent:<agentId>:main`
+sessionKey 格式：
+
+- 主会话：`agent:<agentId>:main`
+- 任务会话：`agent:<agentId>:task:<task_id>`
 
 示例:
 ```
 sessions_send(sessionKey="agent:nerv-gendo:main", message="...", timeoutSeconds=0)
+sessions_send(sessionKey="agent:nerv-eva13:task:live-session-script-v1", message="...", timeoutSeconds=0)
 ```
 
 **禁止** 使用裸 agentId（如 `nerv-gendo`）或省略前缀（如 `nerv-gendo:main`）。
+
+### session 选用规则
+
+- 单轮问答 / 简单状态查询：继续使用 `main`
+- 异步 DAG / 多节点任务 / 需要产物落盘的任务：使用 `task:<task_id>`
+- session 只是执行容器，不是任务真相源
+- 跨天恢复时只查 `nerv.db + artifact + audit_logs`，不要依赖旧聊天上下文
+- 如果 `create_dag_task.js` 的返回里已经给出 `worker_sessions`，派发时必须直接使用该 `session_key`
+- 如果 `create_dag_task.js` 的返回里已经给出 `entry_dispatches`，首批 ready 节点必须直接使用该列表派发
+- 节点完成后继续派发时，必须通过 [`get_ready_dispatches.js`](/Users/dolan/.openclaw/nerv/scripts/tools/get_ready_dispatches.js) 读取 DB 里的 ready 节点和 `session_key`
+- 不允许在 `task_scoped` 任务里再由编排者自行猜测 worker session，更不允许为了省事退回 `agent:<agentId>:main`
 
 ### timeoutSeconds 策略
 
@@ -46,8 +61,27 @@ OpenClaw 的 `sessions_send` 自带 announce 投递：
 **关键原则**：
 ```
 向下游派发任务 → timeoutSeconds: 0（不等回复，通过 NODE_COMPLETED 事件回收）
-向上游回报结果 → 不设 timeoutSeconds（让 announce 机制投递到用户的 IM）
+向上游回报结果 → 回给本次 DISPATCH 的 `source`（不允许硬编码回某个固定 Agent）
 ```
+
+### 回执目标规则（强制）
+
+`NODE_COMPLETED / NODE_FAILED` 的默认回执目标不是固定的 `shinji` 或 `misato`，而是：
+
+- 读取当前 `DISPATCH.source`
+- 回给本次任务的派发者 / 当前编排者
+
+这条规则的实际含义：
+
+- 数据 lane DAG：如果是 `shinji` 派发，下游自然回 `shinji`
+- `misato` 的直发单节点任务：下游必须直接回 `misato`
+- 禁止终端 Agent 把 `shinji` 写死成唯一回执目标
+
+否则会出现：
+
+- 下游明明完成了，但回给了错误的 orchestrator
+- recorder 只记状态，不会替你继续派发
+- DAG 卡在“上游 DONE、下游 PENDING”
 
 ### 用户接单确认（NERV 约定）
 
@@ -62,6 +96,18 @@ OpenClaw 的 `sessions_send` 自带 announce 投递：
    - 等待中的节点
    - “最终结果通过 Adam Notifier 发送”
 ```
+
+补充约束：
+- `misato` 的主接单路径应保持为稳定主 session，不依赖 isolated heartbeat session
+- Heartbeat 只用于巡检，不应用来承载造物主的主任务对话
+- 对异步 DAG，`misato` 应优先给下游分配 `agent:<agentId>:task:<task_id>` 的 task-scoped session
+- `task_id` 不需要用户显式提供；由 `misato` 在识别为任务型请求后自动生成
+- 创建 DAG 只能通过 [`create_dag_task.js`](/Users/dolan/.openclaw/nerv/scripts/tools/create_dag_task.js) 这类正式建图入口完成
+- ready 节点的派发目标只能来自：
+  - `create_dag_task.js` 返回的 `entry_dispatches`
+  - 或 [`get_ready_dispatches.js`](/Users/dolan/.openclaw/nerv/scripts/tools/get_ready_dispatches.js) 的查询结果
+- 禁止通过 `exec` 裸写 `tasks / dag_nodes / dag_edges`，也禁止在会话里用 `node -e` 直接改表拼 DAG
+- 任何“先插 task、再手工补 node”的做法都视为坏图来源，必须废弃重建
 
 禁止反过来：
 
@@ -87,6 +133,8 @@ OpenClaw 的 `sessions_send` 自带 announce 投递：
 ```
 <task_id>:<node_id>:<attempt-id>
 ```
+
+> 任务恢复规则：`dispatch_id` 用于定位某次派发尝试，`task_id` 用于定位任务，`sessionKey` 只用于执行容器恢复。三者缺一不可，但任务真相源始终是 DB。
 
 所有任务完成/失败时，必须 sessions_send 回报给派发者：
 
