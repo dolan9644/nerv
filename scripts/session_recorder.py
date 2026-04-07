@@ -2,7 +2,7 @@
 """
 ███ NERV · Session Recorder · session_recorder.py ███
 
-物理层 DAG 录入器 + 自动通知器。每 5 分钟由 Cron 触发。
+物理层 DAG 录入器 + 自动通知器。默认每 1 分钟由 Cron 触发。
 扫描 Agent session log (.jsonl)，提取 NERV 协议事件，
 自动写入 nerv.db + memory_queue/ + 触发 adam_notifier 通知造物主。
 
@@ -14,7 +14,7 @@
   python3 scripts/session_recorder.py --reset    # 重置 offset，全量扫描
 
 提取的事件:
-  - NODE_COMPLETED / NODE_FAILED（Agent → Misato 的回报）
+  - NODE_COMPLETED / NODE_FAILED（Agent → 上游编排者的回报）
   - DISPATCH（Misato → Agent 的任务分发）
   - DAG_COMPLETE（全 DAG 完成通知）
 """
@@ -23,6 +23,7 @@ import os
 import sys
 import glob
 import sqlite3
+import shutil
 import time
 import subprocess
 import fcntl
@@ -47,6 +48,7 @@ MEMORY_QUEUE_DIR = str(MEMORY_QUEUE_DIR)
 
 # 只扫描 NERV Agent 的 session
 NERV_AGENT_PREFIX = 'nerv-'
+OPENCLAW_BIN = os.environ.get('OPENCLAW_BIN') or shutil.which('openclaw') or '/opt/homebrew/bin/openclaw'
 
 # ═══════════════════════════════════════════════════════════════
 # State 管理
@@ -161,7 +163,9 @@ def extract_dispatch(content_list):
             continue
         
         # 提取目标 agent_id
-        # sessionKey 格式: "agent:nerv-xxx:main"
+        # sessionKey 格式:
+        #   "agent:nerv-xxx:main"
+        #   "agent:nerv-xxx:task:<task_id>"
         parts = session_key.split(':')
         if len(parts) >= 2:
             target_agent = parts[1]
@@ -274,6 +278,29 @@ def ensure_db():
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA journal_mode = WAL')
     conn.execute('PRAGMA busy_timeout = 5000')
+    init_sql = os.path.join(NERV_ROOT, 'scripts', 'init_db.sql')
+    if os.path.exists(init_sql):
+        with open(init_sql, encoding='utf-8') as f:
+            try:
+                conn.executescript(f.read())
+            except sqlite3.OperationalError as exc:
+                if 'no such column' not in str(exc):
+                    raise
+
+    def ensure_column(table_name, column_name, column_def):
+        cols = {row['name'] for row in conn.execute(f'PRAGMA table_info({table_name})').fetchall()}
+        if column_name in cols:
+            return
+        conn.execute(f'ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}')
+
+    ensure_column('tasks', 'orchestrator_agent_id', "TEXT DEFAULT 'nerv-misato'")
+    ensure_column('tasks', 'orchestrator_session_key', 'TEXT')
+    ensure_column('tasks', 'session_strategy', "TEXT DEFAULT 'main'")
+    ensure_column('dag_nodes', 'session_key', 'TEXT')
+    ensure_column('dag_nodes', 'session_scope', "TEXT DEFAULT 'main'")
+    ensure_column('dag_nodes', 'last_dispatch_id', 'TEXT')
+    ensure_column('dag_nodes', 'last_dispatch_at', 'INTEGER')
+
     return conn
 
 def load_task_snapshot(conn, task_id, task_cache):
@@ -283,7 +310,7 @@ def load_task_snapshot(conn, task_id, task_cache):
         return task_cache[task_id]
 
     row = conn.execute(
-        'SELECT task_id, intent, dag_json, status FROM tasks WHERE task_id = ?',
+        'SELECT task_id, intent, dag_json, status, orchestrator_agent_id, orchestrator_session_key, session_strategy FROM tasks WHERE task_id = ?',
         (task_id,)
     ).fetchone()
 
@@ -337,6 +364,34 @@ def resolve_latest_dispatch_id(conn, task_id, node_id):
 
     return None
 
+def infer_task_session_key(agent_id, task_id):
+    if not agent_id or not task_id:
+        return None
+    return f'agent:{agent_id}:task:{task_id}'
+
+def infer_session_scope(session_key, task_id):
+    if not session_key:
+        return None
+    if task_id and f':task:{task_id}' in session_key:
+        return 'task'
+    return 'main'
+
+def upsert_task_session_binding(conn, task_id, agent_id, session_key, session_scope, node_id=None, now=None):
+    if not task_id or not agent_id or not session_key or not session_scope:
+        return
+    now = int(now or time.time())
+    normalized_node_id = node_id or ''
+    conn.execute(
+        '''
+        INSERT INTO task_session_bindings (task_id, agent_id, node_id, session_key, session_scope, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(task_id, agent_id, node_id, session_scope) DO UPDATE SET
+          session_key = excluded.session_key,
+          updated_at = excluded.updated_at
+        ''',
+        (task_id, agent_id, normalized_node_id, session_key, session_scope, now, now)
+    )
+
 def ensure_agent_row(conn, agent_id, now=None):
     if not agent_id or not isinstance(agent_id, str) or not agent_id.startswith('nerv-'):
         return False
@@ -372,6 +427,34 @@ def set_agent_runtime(conn, agent_id, status, current_task_id=None, now=None):
         'UPDATE agents SET status = ?, current_task_id = ?, last_heartbeat = ? WHERE agent_id = ?',
         (status, current_task_id, now, agent_id)
     )
+
+def block_downstream_nodes(conn, task_id, node_id, now=None):
+    if not task_id or not node_id:
+        return 0
+
+    now = int(now or time.time())
+    downstream = conn.execute(
+        '''
+        WITH RECURSIVE downstream_nodes(nid) AS (
+          SELECT to_node FROM dag_edges WHERE from_node = ? AND task_id = ?
+          UNION
+          SELECT e.to_node
+          FROM dag_edges e
+          JOIN downstream_nodes dn ON e.from_node = dn.nid
+          WHERE e.task_id = ?
+        )
+        SELECT nid FROM downstream_nodes
+        ''',
+        (node_id, task_id, task_id)
+    ).fetchall()
+
+    for row in downstream:
+        conn.execute(
+            'UPDATE dag_nodes SET status = "BLOCKED", updated_at = ? WHERE task_id = ? AND node_id = ? AND status = "PENDING"',
+            (now, task_id, row['nid'])
+        )
+
+    return len(downstream)
 
 def normalize_contract_path(path_value):
     if not path_value or not isinstance(path_value, str):
@@ -604,8 +687,21 @@ def record_nerv_event(conn, event_data, task_cache=None):
     existing = conn.execute('SELECT task_id FROM tasks WHERE task_id = ?', (task_id,)).fetchone()
     if not existing:
         conn.execute(
-            'INSERT OR IGNORE INTO tasks (task_id, initiator_id, intent, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-            (task_id, source or 'unknown', f'[auto-recorded] {task_id}', 'RUNNING', now, now)
+            '''
+            INSERT OR IGNORE INTO tasks (task_id, initiator_id, intent, status, orchestrator_agent_id, orchestrator_session_key, session_strategy, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                task_id,
+                source or 'unknown',
+                f'[auto-recorded] {task_id}',
+                'RUNNING',
+                'nerv-misato',
+                infer_task_session_key('nerv-misato', task_id),
+                'task_scoped',
+                now,
+                now
+            )
         )
     
     # 2. 确保 node 存在并更新状态
@@ -642,10 +738,33 @@ def record_nerv_event(conn, event_data, task_cache=None):
             node_def = contract_eval.get('node_def') or {}
             desc = node_def.get('description') or event.get('note', event.get('description', f'[auto-recorded] {node_id}'))
             max_retries = node_def.get('max_retries') or node_def.get('contract', {}).get('runtime_contract', {}).get('max_retries') or 3
+            session_key = node_def.get('session_key') or infer_task_session_key(source, task_id)
+            session_scope = infer_session_scope(session_key, task_id) if session_key else 'main'
             conn.execute(
-                'INSERT OR IGNORE INTO dag_nodes (node_id, task_id, agent_id, description, status, result_path, completed_at, updated_at, max_retries) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (node_id, task_id, source, desc[:200], status, result_path, now, now, max_retries)
+                '''
+                INSERT OR IGNORE INTO dag_nodes
+                  (node_id, task_id, agent_id, description, status, result_path, completed_at, updated_at, max_retries, session_key, session_scope)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                (node_id, task_id, source, desc[:200], status, result_path, now, now, max_retries, session_key, session_scope)
             )
+            if session_key:
+                upsert_task_session_binding(conn, task_id, source, session_key, 'worker', node_id, now)
+
+        if event_type == 'NODE_FAILED':
+            blocked_count = block_downstream_nodes(conn, task_id, node_id, now)
+            if blocked_count > 0:
+                conn.execute(
+                    'INSERT INTO audit_logs (task_id, node_id, agent_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+                    (
+                        task_id,
+                        node_id,
+                        'session_recorder',
+                        'BLOCK_DOWNSTREAM',
+                        json.dumps({'blocked_count': blocked_count}, ensure_ascii=False)[:500],
+                        now
+                    )
+                )
     
     # 3. 检查 task 是否全部完成
     if event_type in ('NODE_COMPLETED', 'NODE_FAILED', 'DAG_COMPLETE'):
@@ -700,6 +819,14 @@ def record_dispatch(conn, dispatch_data, task_cache=None):
     snapshot = load_task_snapshot(conn, task_id, task_cache)
     node_def = snapshot.get('nodes_by_id', {}).get(node_id, {}) if node_id else {}
     existing_node = None
+    target_session_key = d.get('session_key') or node_def.get('session_key')
+    target_session_scope = infer_session_scope(target_session_key, task_id) if target_session_key else None
+    task_row = snapshot.get('row')
+    orchestrator_session_key = (
+        task_row['orchestrator_session_key']
+        if task_row is not None and 'orchestrator_session_key' in task_row.keys() else None
+    ) or infer_task_session_key('nerv-misato', task_id)
+    session_strategy = 'task_scoped' if orchestrator_session_key and f':task:{task_id}' in orchestrator_session_key else 'main'
 
     touch_agent_heartbeat(conn, 'nerv-misato', now)
     
@@ -708,11 +835,29 @@ def record_dispatch(conn, dispatch_data, task_cache=None):
     if not existing:
         intent = event.get('intent', event.get('description', f'[auto-recorded] {task_id}'))
         conn.execute(
-            'INSERT OR IGNORE INTO tasks (task_id, initiator_id, intent, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-            (task_id, 'nerv-misato', intent[:200], 'RUNNING', now, now)
+            '''
+            INSERT OR IGNORE INTO tasks (task_id, initiator_id, intent, status, orchestrator_agent_id, orchestrator_session_key, session_strategy, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (task_id, 'nerv-misato', intent[:200], 'RUNNING', 'nerv-misato', orchestrator_session_key, session_strategy, now, now)
         )
     elif existing['status'] == 'PENDING':
         conn.execute('UPDATE tasks SET status = "RUNNING", updated_at = ? WHERE task_id = ?', (now, task_id))
+    conn.execute(
+        '''
+        UPDATE tasks
+        SET orchestrator_agent_id = COALESCE(orchestrator_agent_id, 'nerv-misato'),
+            orchestrator_session_key = COALESCE(orchestrator_session_key, ?),
+            session_strategy = CASE
+              WHEN session_strategy IS NULL OR session_strategy = '' THEN ?
+              ELSE session_strategy
+            END,
+            updated_at = ?
+        WHERE task_id = ?
+        ''',
+        (orchestrator_session_key, session_strategy, now, task_id)
+    )
+    upsert_task_session_binding(conn, task_id, 'nerv-misato', orchestrator_session_key, 'orchestrator', None, now)
     
     # 创建 node（如 dispatch 中有 node_id）
     if node_id:
@@ -725,14 +870,31 @@ def record_dispatch(conn, dispatch_data, task_cache=None):
         if existing_node:
             if existing_node['status'] != 'DONE':
                 conn.execute(
-                    'UPDATE dag_nodes SET status = ?, started_at = COALESCE(started_at, ?), updated_at = ? WHERE node_id = ? AND task_id = ?',
-                    ('RUNNING', now, now, node_id, task_id)
+                    '''
+                    UPDATE dag_nodes
+                    SET status = ?,
+                        started_at = COALESCE(started_at, ?),
+                        session_key = COALESCE(?, session_key),
+                        session_scope = COALESCE(?, session_scope),
+                        last_dispatch_id = ?,
+                        last_dispatch_at = ?,
+                        updated_at = ?
+                    WHERE node_id = ? AND task_id = ?
+                    ''',
+                    ('RUNNING', now, target_session_key, target_session_scope, dispatch_id, now, now, node_id, task_id)
                 )
         else:
             conn.execute(
-                'INSERT OR IGNORE INTO dag_nodes (node_id, task_id, agent_id, description, status, started_at, updated_at, max_retries) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                (node_id, task_id, target, desc[:200], 'RUNNING', now, now, max_retries)
+                '''
+                INSERT OR IGNORE INTO dag_nodes
+                  (node_id, task_id, agent_id, description, status, started_at, updated_at, max_retries, session_key, session_scope, last_dispatch_id, last_dispatch_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                (node_id, task_id, target, desc[:200], 'RUNNING', now, now, max_retries, target_session_key, target_session_scope or 'main', dispatch_id, now)
             )
+
+        if target_session_key:
+            upsert_task_session_binding(conn, task_id, target, target_session_key, 'worker', node_id, now)
 
     if target and not (existing_node and existing_node['status'] == 'DONE'):
         set_agent_runtime(conn, target, 'RUNNING', task_id, now)
@@ -742,7 +904,10 @@ def record_dispatch(conn, dispatch_data, task_cache=None):
         'dispatch_id': dispatch_id,
         'dispatch_id_source': dispatch_id_source,
         'target_agent': target,
-        'session_key': d.get('session_key'),
+        'session_key': target_session_key,
+        'session_scope': target_session_scope,
+        'orchestrator_session_key': orchestrator_session_key,
+        'session_strategy': session_strategy,
         'tool_call_id': d.get('tool_call_id'),
         'timeout_seconds': d.get('timeout_seconds'),
         'message_excerpt': d.get('message', '')
@@ -764,8 +929,8 @@ def recompute_task_status(conn, task_id, now=None):
         '''
         SELECT COUNT(*) as total,
                SUM(CASE WHEN status = "DONE" THEN 1 ELSE 0 END) as done,
-               SUM(CASE WHEN status IN ("FAILED", "CIRCUIT_BROKEN") THEN 1 ELSE 0 END) as failed,
-               SUM(CASE WHEN status IN ("DONE", "FAILED", "CIRCUIT_BROKEN") THEN 1 ELSE 0 END) as terminal
+               SUM(CASE WHEN status IN ("FAILED", "CIRCUIT_BROKEN", "BLOCKED") THEN 1 ELSE 0 END) as failed,
+               SUM(CASE WHEN status IN ("DONE", "FAILED", "CIRCUIT_BROKEN", "BLOCKED") THEN 1 ELSE 0 END) as terminal
         FROM dag_nodes WHERE task_id = ?
         ''',
         (task_id,)
@@ -839,13 +1004,156 @@ def reconcile_terminal_audit_states(conn):
                 node_id
             )
         )
+        if desired_status == 'FAILED':
+            block_downstream_nodes(conn, task_id, node_id, now)
         touched_tasks.add(task_id)
+
+    for task_id in touched_tasks:
+        recompute_task_status(conn, task_id, now)
+
+def reconcile_failed_downstream_blocks(conn):
+    now = int(time.time())
+    failed_nodes = conn.execute(
+        '''
+        SELECT task_id, node_id
+        FROM dag_nodes
+        WHERE status IN ("FAILED", "CIRCUIT_BROKEN")
+        '''
+    ).fetchall()
+
+    touched_tasks = set()
+    for row in failed_nodes:
+        blocked_count = block_downstream_nodes(conn, row['task_id'], row['node_id'], now)
+        if blocked_count > 0:
+            touched_tasks.add(row['task_id'])
 
     for task_id in touched_tasks:
         recompute_task_status(conn, task_id, now)
 
     if touched_tasks:
         conn.commit()
+
+def reconcile_dispatch_audit_states(conn):
+    now = int(time.time())
+    rows = conn.execute(
+        '''
+        SELECT id, task_id, node_id, detail, created_at
+        FROM audit_logs
+        WHERE action = 'RECORDED_DISPATCH'
+        ORDER BY id DESC
+        '''
+    ).fetchall()
+
+    latest = {}
+    for row in rows:
+        key = (row['task_id'], row['node_id'])
+        if key not in latest:
+            latest[key] = row
+
+    for (task_id, node_id), row in latest.items():
+        if not task_id or not node_id:
+            continue
+
+        try:
+            detail = json.loads(row['detail'] or '{}')
+        except Exception:
+            detail = {}
+
+        dispatch_id = detail.get('dispatch_id')
+        session_key = detail.get('session_key')
+        session_scope = detail.get('session_scope')
+        if not session_scope and session_key:
+            session_scope = infer_session_scope(session_key, task_id) or 'main'
+
+        node = conn.execute(
+            '''
+            SELECT status, session_key, session_scope, last_dispatch_id, last_dispatch_at, agent_id
+            FROM dag_nodes
+            WHERE task_id = ? AND node_id = ?
+            ''',
+            (task_id, node_id)
+        ).fetchone()
+        if not node:
+            continue
+
+        status = node['status']
+        should_update = (
+            (dispatch_id and node['last_dispatch_id'] != dispatch_id) or
+            (row['created_at'] and node['last_dispatch_at'] != row['created_at']) or
+            (session_key and node['session_key'] != session_key) or
+            (session_scope and node['session_scope'] != session_scope) or
+            (status == 'PENDING')
+        )
+        if not should_update:
+            continue
+
+        next_status = status if status not in ('PENDING',) else 'RUNNING'
+        conn.execute(
+            '''
+            UPDATE dag_nodes
+            SET status = ?,
+                session_key = COALESCE(?, session_key),
+                session_scope = COALESCE(?, session_scope),
+                last_dispatch_id = COALESCE(?, last_dispatch_id),
+                last_dispatch_at = COALESCE(?, last_dispatch_at),
+                started_at = COALESCE(started_at, ?),
+                updated_at = ?
+            WHERE task_id = ? AND node_id = ?
+            ''',
+            (
+                next_status,
+                session_key,
+                session_scope,
+                dispatch_id,
+                row['created_at'],
+                row['created_at'] or now,
+                now,
+                task_id,
+                node_id
+            )
+        )
+
+        if session_key and node['agent_id']:
+            upsert_task_session_binding(conn, task_id, node['agent_id'], session_key, 'worker', node_id, now)
+
+        orchestrator_session_key = detail.get('orchestrator_session_key')
+        if orchestrator_session_key:
+            conn.execute(
+                '''
+                UPDATE tasks
+                SET orchestrator_session_key = COALESCE(orchestrator_session_key, ?),
+                    session_strategy = CASE
+                      WHEN session_strategy IS NULL OR session_strategy = '' THEN ?
+                      ELSE session_strategy
+                    END,
+                    updated_at = ?
+                WHERE task_id = ?
+                ''',
+                (
+                    orchestrator_session_key,
+                    'task_scoped' if f':task:{task_id}' in orchestrator_session_key else 'main',
+                    now,
+                    task_id
+                )
+            )
+            upsert_task_session_binding(conn, task_id, 'nerv-misato', orchestrator_session_key, 'orchestrator', None, now)
+
+    conn.commit()
+
+def reconcile_task_rollups(conn):
+    now = int(time.time())
+    task_rows = conn.execute(
+        '''
+        SELECT DISTINCT task_id
+        FROM dag_nodes
+        WHERE task_id IS NOT NULL AND task_id != ''
+        '''
+    ).fetchall()
+
+    for row in task_rows:
+        recompute_task_status(conn, row['task_id'], now)
+
+    conn.commit()
 
 # ═══════════════════════════════════════════════════════════════
 # 自动通知（Adam Notifier）
@@ -870,9 +1178,37 @@ def save_notified(notified_set):
     with open(NOTIFY_STATE_FILE, 'w', encoding='utf-8') as f:
         json.dump(recent, f)
 
-def notify_completion(event_data, notified_set):
+def get_task_runtime_summary(conn, task_id):
+    if conn is None or not task_id:
+        return None
+
+    task_row = conn.execute(
+        'SELECT status FROM tasks WHERE task_id = ?',
+        (task_id,)
+    ).fetchone()
+    counts = conn.execute(
+        '''
+        SELECT COUNT(*) as total,
+               SUM(CASE WHEN status = "DONE" THEN 1 ELSE 0 END) as done,
+               SUM(CASE WHEN status IN ("FAILED", "CIRCUIT_BROKEN", "BLOCKED") THEN 1 ELSE 0 END) as failed,
+               SUM(CASE WHEN status IN ("DONE", "FAILED", "CIRCUIT_BROKEN", "BLOCKED") THEN 1 ELSE 0 END) as terminal
+        FROM dag_nodes
+        WHERE task_id = ?
+        ''',
+        (task_id,)
+    ).fetchone()
+
+    return {
+        'status': task_row['status'] if task_row else None,
+        'total': counts['total'] if counts else 0,
+        'done': counts['done'] if counts else 0,
+        'failed': counts['failed'] if counts else 0,
+        'terminal': counts['terminal'] if counts else 0
+    }
+
+def notify_completion(event_data, notified_set, conn=None):
     """
-    当检测到 NODE_COMPLETED / DAG_COMPLETE 时，自动调用 adam_notifier 通知造物主。
+    当检测到终态事件时，自动调用 adam_notifier 通知造物主。
     
     这解决了 Misato session 压缩导致丢失通知的问题。
     session_recorder 作为 Cron 独立运行，不依赖任何 Agent session。
@@ -897,13 +1233,25 @@ def notify_completion(event_data, notified_set):
     node_id = event.get('node_id', '')
     note = event.get('note', event.get('description', ''))
     
+    task_summary = get_task_runtime_summary(conn, task_id)
+    is_single_node_task = bool(task_summary and task_summary['total'] <= 1)
+    is_task_done = bool(task_summary and task_summary['status'] == 'DONE')
+    is_task_failed = bool(task_summary and task_summary['status'] == 'FAILED')
+
     if event_type == 'NODE_COMPLETED':
-        msg = f"✅ 任务完成 | {source} | {task_id}"
+        if not (is_single_node_task or is_task_done):
+            return {'sent': False, 'reason': 'intermediate_node_no_notify'}
+        msg = f"✅ 任务完成 | {task_id}"
+        if node_id:
+            msg += f"\n🧩 终态节点: {source} / {node_id}"
         if note:
             msg += f"\n📋 {note[:200]}"
     elif event_type == 'NODE_FAILED':
         error = event.get('error', '未知错误')
-        msg = f"❌ 任务失败 | {source} | {task_id}\n⚠️ {error}"
+        if is_task_failed:
+            msg = f"❌ 任务失败 | {task_id}\n🧩 失败节点: {source} / {node_id}\n⚠️ {error}"
+        else:
+            msg = f"❌ 节点失败 | {task_id} / {node_id}\n🧩 {source}\n⚠️ {error}"
     elif event_type == 'DAG_COMPLETE':
         msg = f"🎯 DAG 全部完成 | {task_id}"
     else:
@@ -1012,6 +1360,240 @@ def write_memory_queue(event_data, task_cache=None, conn=None):
         json.dump(record, f, indent=2, ensure_ascii=False)
 
 # ═══════════════════════════════════════════════════════════════
+# 编排者续推（完成事件后立即唤醒 Misato）
+# ═══════════════════════════════════════════════════════════════
+
+def get_ready_dispatch_nodes(conn, task_id):
+    if not task_id:
+        return []
+    return conn.execute(
+        '''
+        SELECT
+          dn.node_id,
+          dn.agent_id,
+          dn.description,
+          dn.session_key,
+          dn.session_scope,
+          dn.last_dispatch_id,
+          dn.last_dispatch_at
+        FROM dag_nodes dn
+        WHERE dn.task_id = ? AND dn.status = 'PENDING'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM dag_edges e
+            JOIN dag_nodes upstream ON e.from_node = upstream.node_id
+            WHERE e.to_node = dn.node_id
+              AND e.task_id = ?
+              AND upstream.status != 'DONE'
+          )
+        ORDER BY dn.depth ASC, dn.node_id ASC
+        ''',
+        (task_id, task_id)
+    ).fetchall()
+
+def get_task_row(conn, task_id):
+    if not task_id:
+        return None
+    return conn.execute(
+        '''
+        SELECT task_id, status, orchestrator_agent_id, orchestrator_session_key, session_strategy
+        FROM tasks
+        WHERE task_id = ?
+        ''',
+        (task_id,)
+    ).fetchone()
+
+def load_session_store(agent_id):
+    if not agent_id:
+        return {}
+    store_path = os.path.join(OPENCLAW_ROOT, 'agents', agent_id, 'sessions', 'sessions.json')
+    if not os.path.exists(store_path):
+        return {}
+    try:
+        with open(store_path, encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def resolve_session_id(agent_id, session_key):
+    if not agent_id or not session_key:
+        return None
+
+    store = load_session_store(agent_id)
+    entry = store.get(session_key)
+    if isinstance(entry, dict):
+        session_id = entry.get('sessionId')
+        if isinstance(session_id, str) and session_id.strip():
+            return session_id.strip()
+
+    try:
+        result = subprocess.run(
+            [OPENCLAW_BIN, 'sessions', '--agent', agent_id, '--json', '--active', '1440'],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            cwd=OPENCLAW_ROOT
+        )
+        if result.returncode != 0:
+            return None
+        payload = json.loads(result.stdout or '{}')
+        for row in payload.get('sessions', []):
+            if row.get('key') == session_key and row.get('sessionId'):
+                return str(row['sessionId']).strip()
+    except Exception:
+        return None
+
+    return None
+
+def wake_already_sent_recently(conn, task_id, fingerprint, window_seconds=90):
+    if not task_id or not fingerprint:
+        return False
+    cutoff = int(time.time()) - window_seconds
+    row = conn.execute(
+        '''
+        SELECT 1
+        FROM audit_logs
+        WHERE task_id = ?
+          AND action = 'ORCHESTRATOR_WAKE_SENT'
+          AND created_at >= ?
+          AND detail LIKE ?
+        LIMIT 1
+        ''',
+        (task_id, cutoff, f'%{fingerprint}%')
+    ).fetchone()
+    return bool(row)
+
+def wake_orchestrator_for_task(conn, task_id, trigger):
+    now = int(time.time())
+    task_row = get_task_row(conn, task_id)
+    if not task_row:
+        return {'sent': False, 'reason': 'task_missing'}
+
+    if task_row['status'] != 'RUNNING':
+        return {'sent': False, 'reason': f'task_not_running:{task_row["status"]}'}
+
+    ready_nodes = get_ready_dispatch_nodes(conn, task_id)
+    if not ready_nodes:
+        return {'sent': False, 'reason': 'no_ready_nodes'}
+
+    orchestrator_agent = task_row['orchestrator_agent_id'] or 'nerv-misato'
+    orchestrator_session_key = task_row['orchestrator_session_key'] or infer_task_session_key(orchestrator_agent, task_id)
+    session_id = resolve_session_id(orchestrator_agent, orchestrator_session_key)
+    ready_node_ids = [row['node_id'] for row in ready_nodes if row['node_id']]
+    fingerprint = '|'.join(sorted(ready_node_ids))
+
+    if wake_already_sent_recently(conn, task_id, fingerprint):
+        return {'sent': False, 'reason': 'duplicate_recent'}
+
+    if not session_id:
+        conn.execute(
+            'INSERT INTO audit_logs (task_id, node_id, agent_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+            (
+                task_id,
+                None,
+                'session_recorder',
+                'ORCHESTRATOR_WAKE_MISSING_SESSION',
+                json.dumps({
+                    'orchestrator_agent_id': orchestrator_agent,
+                    'orchestrator_session_key': orchestrator_session_key,
+                    'ready_nodes': ready_node_ids
+                }, ensure_ascii=False)[:500],
+                now
+            )
+        )
+        conn.commit()
+        return {'sent': False, 'reason': 'missing_session_id'}
+
+    message = (
+        f"[NERV_CONTINUE_DAG]\n"
+        f"task_id={task_id}\n"
+        f"cause_event={trigger.get('event_type','NODE_COMPLETED')}\n"
+        f"cause_node={trigger.get('node_id','')}\n"
+        "继续当前 DAG，不要重建任务，不要重新规划。\n"
+        "立即执行：\n"
+        f"1. exec `node /Users/dolan/.openclaw/nerv/scripts/tools/get_ready_dispatches.js {task_id}`\n"
+        "2. 只派发 ready_dispatches 中的节点，严格使用返回的 session_key\n"
+        "3. 如果 ready_dispatches 为空或 task 已终态，停止，不要重复通知\n"
+        "4. 禁止回退到 agent:<agentId>:main\n"
+        "回复只需简短说明已派发节点或 NO_READY。"
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                OPENCLAW_BIN,
+                'agent',
+                '--agent', orchestrator_agent,
+                '--session-id', session_id,
+                '--message', message,
+                '--thinking', 'minimal',
+                '--timeout', '90',
+                '--json'
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=OPENCLAW_ROOT
+        )
+    except Exception as exc:
+        conn.execute(
+            'INSERT INTO audit_logs (task_id, node_id, agent_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+            (
+                task_id,
+                None,
+                'session_recorder',
+                'ORCHESTRATOR_WAKE_FAILED',
+                json.dumps({
+                    'error': str(exc),
+                    'orchestrator_agent_id': orchestrator_agent,
+                    'session_id': session_id,
+                    'ready_nodes': ready_node_ids
+                }, ensure_ascii=False)[:500],
+                now
+            )
+        )
+        conn.commit()
+        return {'sent': False, 'reason': 'wake_exception', 'detail': str(exc)}
+
+    action = 'ORCHESTRATOR_WAKE_SENT' if result.returncode == 0 else 'ORCHESTRATOR_WAKE_FAILED'
+    conn.execute(
+        'INSERT INTO audit_logs (task_id, node_id, agent_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        (
+            task_id,
+            None,
+            'session_recorder',
+            action,
+            json.dumps({
+                'orchestrator_agent_id': orchestrator_agent,
+                'orchestrator_session_key': orchestrator_session_key,
+                'session_id': session_id,
+                'ready_nodes': ready_node_ids,
+                'ready_count': len(ready_node_ids),
+                'fingerprint': fingerprint,
+                'stdout_excerpt': (result.stdout or '')[:220],
+                'stderr_excerpt': (result.stderr or '')[:220],
+                'returncode': result.returncode
+            }, ensure_ascii=False)[:500],
+            now
+        )
+    )
+    conn.commit()
+
+    if result.returncode != 0:
+        return {
+            'sent': False,
+            'reason': 'wake_command_failed',
+            'detail': ((result.stderr or result.stdout or '').strip())[:300]
+        }
+
+    return {
+        'sent': True,
+        'reason': 'ok',
+        'ready_nodes': ready_node_ids
+    }
+
+# ═══════════════════════════════════════════════════════════════
 # 主逻辑
 # ═══════════════════════════════════════════════════════════════
 
@@ -1049,6 +1631,8 @@ def main():
     event_breakdown = {}
     notification_failures = []
     contract_rejections = []
+    wake_candidates = {}
+    wake_results = []
     notified_set = load_notified()
     task_cache = {}
     
@@ -1108,8 +1692,20 @@ def main():
                             if outcome.get('ok'):
                                 total_recorded += 1
                                 write_memory_queue(ev, task_cache, conn)
+                                inner = ev.get('event', {})
+                                task_id = inner.get('task_id', '')
+                                event_type = inner.get('event', '')
+                                if task_id and event_type in ('NODE_COMPLETED', 'NODE_FAILED'):
+                                    bucket = wake_candidates.setdefault(task_id, {
+                                        'event_types': set(),
+                                        'node_ids': set()
+                                    })
+                                    bucket['event_types'].add(event_type)
+                                    node_id = inner.get('node_id')
+                                    if node_id:
+                                        bucket['node_ids'].add(node_id)
                                 # 自动通知造物主
-                                notify_result = notify_completion(ev, notified_set)
+                                notify_result = notify_completion(ev, notified_set, conn=conn)
                                 if notify_result['sent']:
                                     total_notified += 1
                                 elif notify_result['reason'] not in ('duplicate', 'unsupported_event'):
@@ -1136,7 +1732,22 @@ def main():
                 state[file_key] = new_offset
         
         if not dry_run:
+            reconcile_dispatch_audit_states(conn)
             reconcile_terminal_audit_states(conn)
+            reconcile_failed_downstream_blocks(conn)
+            reconcile_task_rollups(conn)
+            for task_id, trigger in wake_candidates.items():
+                wake_results.append({
+                    'task_id': task_id,
+                    **wake_orchestrator_for_task(
+                        conn,
+                        task_id,
+                        {
+                            'event_type': '+'.join(sorted(trigger['event_types'])),
+                            'node_id': ','.join(sorted(trigger['node_ids']))
+                        }
+                    )
+                })
             save_state(state)
             save_notified(notified_set)
     finally:
@@ -1154,6 +1765,7 @@ def main():
         'contract_rejections': contract_rejections[:20],
         'notifications_sent': total_notified,
         'notification_failures': notification_failures[:20],
+        'orchestrator_wakes': wake_results[:20],
         'scan_errors': scan_errors[:20],
         'dry_run': dry_run
     }

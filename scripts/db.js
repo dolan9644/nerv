@@ -76,6 +76,17 @@ function getDb() {
       // 此处自动对齐：解析 init_db.sql 中的列定义，与实际表对比，补缺。
       migrateSchema(_db, initSql);
       ensureRequiredColumns(_db, {
+        tasks: {
+          orchestrator_agent_id: "TEXT DEFAULT 'nerv-misato'",
+          orchestrator_session_key: 'TEXT',
+          session_strategy: "TEXT DEFAULT 'main'"
+        },
+        dag_nodes: {
+          session_key: 'TEXT',
+          session_scope: "TEXT DEFAULT 'main'",
+          last_dispatch_id: 'TEXT',
+          last_dispatch_at: 'INTEGER'
+        },
         skill_registry: {
           load_source: "TEXT DEFAULT 'managed'",
           source_priority: 'INTEGER DEFAULT 0',
@@ -181,6 +192,49 @@ function closeDb() {
   }
 }
 
+function buildMainSessionKey(agentId) {
+  return `agent:${agentId}:main`;
+}
+
+function buildTaskSessionKey(agentId, taskId) {
+  return `agent:${agentId}:task:${taskId}`;
+}
+
+function normalizeSessionStrategy(value) {
+  return value === 'task_scoped' ? 'task_scoped' : 'main';
+}
+
+function resolveDispatchMode(node = {}) {
+  return node?.contract?.dispatch_contract?.mode || 'agent_session';
+}
+
+function resolveNodeSessionKey(node = {}, taskId, sessionStrategy) {
+  const dispatchMode = resolveDispatchMode(node);
+  if (dispatchMode !== 'agent_session') {
+    return { sessionKey: null, sessionScope: null, dispatchMode };
+  }
+
+  const explicit = node.session_key || node?.contract?.dispatch_contract?.session_key || null;
+  if (explicit) {
+    const sessionScope = explicit.includes(`:task:${taskId}`) ? 'task' : 'main';
+    return { sessionKey: explicit, sessionScope, dispatchMode };
+  }
+
+  if (sessionStrategy === 'task_scoped') {
+    return {
+      sessionKey: buildTaskSessionKey(node.agent_id, taskId),
+      sessionScope: 'task',
+      dispatchMode
+    };
+  }
+
+  return {
+    sessionKey: buildMainSessionKey(node.agent_id),
+    sessionScope: 'main',
+    dispatchMode
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════
 // SQLITE_BUSY 指数退避重试 (异步非阻塞版)
 // 多 Agent 并发写入时的必要防护
@@ -212,15 +266,22 @@ async function withRetry(fn, retries = MAX_RETRIES) {
 // 任务（Tasks）操作
 // ═══════════════════════════════════════════════════════════════
 
-async function createTask(taskId, initiatorId, intent, priority = 0, dagJson = null) {
+async function createTask(taskId, initiatorId, intent, priority = 0, dagJson = null, options = {}) {
+  const orchestratorAgentId = options.orchestratorAgentId || 'nerv-misato';
+  const sessionStrategy = normalizeSessionStrategy(options.sessionStrategy);
+  const orchestratorSessionKey = options.orchestratorSessionKey || (
+    sessionStrategy === 'task_scoped'
+      ? buildTaskSessionKey(orchestratorAgentId, taskId)
+      : buildMainSessionKey(orchestratorAgentId)
+  );
   const result = await withRetry((db) => {
     db.prepare(`
-      INSERT INTO tasks (task_id, initiator_id, intent, priority, dag_json)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(taskId, initiatorId, intent, priority, dagJson);
+      INSERT INTO tasks (task_id, initiator_id, intent, priority, dag_json, orchestrator_agent_id, orchestrator_session_key, session_strategy)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(taskId, initiatorId, intent, priority, dagJson, orchestratorAgentId, orchestratorSessionKey, sessionStrategy);
     return taskId;
   });
-  await writeAuditLog(taskId, null, 'misato', 'CREATE_TASK', JSON.stringify({ intent, priority }));
+  await writeAuditLog(taskId, null, orchestratorAgentId, 'CREATE_TASK', JSON.stringify({ intent, priority, session_strategy: sessionStrategy, orchestrator_session_key: orchestratorSessionKey }));
   return result;
 }
 
@@ -250,12 +311,14 @@ async function getTasksByStatus(status) {
 // DAG 节点操作
 // ═══════════════════════════════════════════════════════════════
 
-async function createDagNode(nodeId, taskId, agentId, description, depth = 0, maxRetries = 3) {
+async function createDagNode(nodeId, taskId, agentId, description, depth = 0, maxRetries = 3, options = {}) {
+  const sessionKey = options.sessionKey ?? null;
+  const sessionScope = options.sessionScope ?? (sessionKey && sessionKey.includes(`:task:${taskId}`) ? 'task' : 'main');
   return withRetry((db) => {
     db.prepare(`
-      INSERT INTO dag_nodes (node_id, task_id, agent_id, description, depth, max_retries)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(nodeId, taskId, agentId, description, depth, maxRetries);
+      INSERT INTO dag_nodes (node_id, task_id, agent_id, description, depth, max_retries, session_key, session_scope)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(nodeId, taskId, agentId, description, depth, maxRetries, sessionKey, sessionScope);
   });
 }
 
@@ -391,6 +454,36 @@ async function getEntryNodes(taskId) {
 }
 
 /**
+ * 获取当前所有 ready 节点，并带出 session / 派发所需最小元数据
+ * 用于 Misato 在建图后和节点完成后直接读取 DB 真相源，而不是手工拼接 sessionKey。
+ */
+async function getReadyDispatchNodes(taskId) {
+  return withRetry((db) => {
+    return db.prepare(`
+      SELECT
+        dn.node_id,
+        dn.agent_id,
+        dn.description,
+        dn.status,
+        dn.session_key,
+        dn.session_scope,
+        dn.last_dispatch_id,
+        dn.last_dispatch_at
+      FROM dag_nodes dn
+      WHERE dn.task_id = ? AND dn.status = 'PENDING'
+      AND NOT EXISTS (
+        SELECT 1 FROM dag_edges e
+        JOIN dag_nodes upstream ON e.from_node = upstream.node_id
+        WHERE e.to_node = dn.node_id
+          AND e.task_id = ?
+          AND upstream.status != 'DONE'
+      )
+      ORDER BY dn.depth ASC, dn.node_id ASC
+    `).all(taskId, taskId);
+  });
+}
+
+/**
  * 检查任务的所有节点是否全部完成
  */
 async function isTaskComplete(taskId) {
@@ -481,6 +574,34 @@ async function getAuditLogs(taskId = null, limit = 100) {
     return db.prepare(
       'SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?'
     ).all(limit);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Task Session 映射
+// ═══════════════════════════════════════════════════════════════
+
+async function upsertTaskSessionBinding(taskId, agentId, sessionKey, sessionScope = 'worker', nodeId = null) {
+  const normalizedNodeId = nodeId || '';
+  return withRetry((db) => {
+    db.prepare(`
+      INSERT INTO task_session_bindings (task_id, agent_id, node_id, session_key, session_scope, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+      ON CONFLICT(task_id, agent_id, node_id, session_scope) DO UPDATE SET
+        session_key = excluded.session_key,
+        updated_at = strftime('%s','now')
+    `).run(taskId, agentId, normalizedNodeId, sessionKey, sessionScope);
+  });
+}
+
+async function getTaskSessionBindings(taskId) {
+  return withRetry((db) => {
+    return db.prepare(`
+      SELECT task_id, agent_id, node_id, session_key, session_scope, created_at, updated_at
+      FROM task_session_bindings
+      WHERE task_id = ?
+      ORDER BY session_scope, agent_id, node_id
+    `).all(taskId);
   });
 }
 
@@ -608,27 +729,80 @@ async function resolveApproval(id, status, resolvedBy = '造物主') {
  * @param {string} params.initiatorId
  * @param {string} params.intent
  * @param {number} params.priority
- * @param {Array<{node_id, agent_id, description, depth?, max_retries?}>} params.nodes
+ * @param {Array<{node_id, agent_id, description, depth?, max_retries?, contract?, session_key?}>} params.nodes
  * @param {Array<{from, to}>} params.edges
  */
-async function createFullDag({ taskId, initiatorId, intent, priority = 0, nodes, edges = [] }) {
+async function createFullDag({
+  taskId,
+  initiatorId,
+  intent,
+  priority = 0,
+  nodes,
+  edges = [],
+  orchestratorAgentId = 'nerv-misato',
+  orchestratorSessionKey = null,
+  sessionStrategy = 'task_scoped'
+}) {
   return withRetry((db) => {
-    const dagJson = JSON.stringify({ nodes, edges });
+    const normalizedStrategy = normalizeSessionStrategy(sessionStrategy);
+    const effectiveOrchestratorSessionKey = orchestratorSessionKey || (
+      normalizedStrategy === 'task_scoped'
+        ? buildTaskSessionKey(orchestratorAgentId, taskId)
+        : buildMainSessionKey(orchestratorAgentId)
+    );
+    const enrichedNodes = nodes.map((node) => {
+      const { sessionKey, sessionScope } = resolveNodeSessionKey(node, taskId, normalizedStrategy);
+      return {
+        ...node,
+        session_key: sessionKey,
+        session_scope: sessionScope ?? 'main'
+      };
+    });
+    const dagJson = JSON.stringify({ nodes: enrichedNodes, edges });
 
     const txn = db.transaction(() => {
       // 1. 创建 Task
       db.prepare(`
-        INSERT INTO tasks (task_id, initiator_id, intent, priority, dag_json)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(taskId, initiatorId, intent, priority, dagJson);
+        INSERT INTO tasks (task_id, initiator_id, intent, priority, dag_json, orchestrator_agent_id, orchestrator_session_key, session_strategy)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(taskId, initiatorId, intent, priority, dagJson, orchestratorAgentId, effectiveOrchestratorSessionKey, normalizedStrategy);
+
+      db.prepare(`
+        INSERT INTO task_session_bindings (task_id, agent_id, node_id, session_key, session_scope, created_at, updated_at)
+        VALUES (?, ?, '', ?, 'orchestrator', strftime('%s','now'), strftime('%s','now'))
+        ON CONFLICT(task_id, agent_id, node_id, session_scope) DO UPDATE SET
+          session_key = excluded.session_key,
+          updated_at = strftime('%s','now')
+      `).run(taskId, orchestratorAgentId, effectiveOrchestratorSessionKey);
 
       // 2. 批量创建 Nodes
       const stmtNode = db.prepare(`
-        INSERT INTO dag_nodes (node_id, task_id, agent_id, description, depth, max_retries)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO dag_nodes (node_id, task_id, agent_id, description, depth, max_retries, session_key, session_scope)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      for (const n of nodes) {
-        stmtNode.run(n.node_id, taskId, n.agent_id, n.description, n.depth ?? 0, n.max_retries ?? 3);
+      const stmtSession = db.prepare(`
+        INSERT INTO task_session_bindings (task_id, agent_id, node_id, session_key, session_scope, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'worker', strftime('%s','now'), strftime('%s','now'))
+        ON CONFLICT(task_id, agent_id, node_id, session_scope) DO UPDATE SET
+          session_key = excluded.session_key,
+          updated_at = strftime('%s','now')
+      `);
+      for (const n of enrichedNodes) {
+        const sessionKey = n.session_key;
+        const sessionScope = n.session_scope;
+        stmtNode.run(
+          n.node_id,
+          taskId,
+          n.agent_id,
+          n.description,
+          n.depth ?? 0,
+          n.max_retries ?? 3,
+          sessionKey,
+          sessionScope ?? 'main'
+        );
+        if (sessionKey) {
+          stmtSession.run(taskId, n.agent_id, n.node_id || '', sessionKey);
+        }
       }
 
       // 3. 批量创建 Edges
@@ -644,12 +818,31 @@ async function createFullDag({ taskId, initiatorId, intent, priority = 0, nodes,
       db.prepare(`
         INSERT INTO audit_logs (task_id, node_id, agent_id, action, detail)
         VALUES (?, NULL, ?, 'DAG_CREATED', ?)
-      `).run(taskId, initiatorId, JSON.stringify({ node_count: nodes.length, edge_count: edges.length }));
+      `).run(taskId, initiatorId, JSON.stringify({
+        node_count: nodes.length,
+        edge_count: edges.length,
+        session_strategy: normalizedStrategy,
+        orchestrator_agent_id: orchestratorAgentId,
+        orchestrator_session_key: effectiveOrchestratorSessionKey
+      }));
     });
 
     // 执行事务（原子化：任何一步失败全部回滚）
     txn();
-    return { taskId, nodesCreated: nodes.length, edgesCreated: edges.length };
+    const workerSessions = enrichedNodes.map((node) => ({
+      node_id: node.node_id,
+      agent_id: node.agent_id,
+      session_key: node.session_key || null,
+      session_scope: node.session_scope || 'main'
+    }));
+    return {
+      taskId,
+      nodesCreated: nodes.length,
+      edgesCreated: edges.length,
+      orchestratorSessionKey: effectiveOrchestratorSessionKey,
+      sessionStrategy: normalizedStrategy,
+      workerSessions
+    };
   });
 }
 
@@ -667,8 +860,10 @@ export {
   // DAG Nodes
   createDagNode, createDagEdge, updateNodeStatus, incrementRetry,
   getReadyDownstream, getEntryNodes, isTaskComplete,
+  getReadyDispatchNodes,
   // DAG 原子创建
   createFullDag,
+  buildMainSessionKey, buildTaskSessionKey, getTaskSessionBindings, upsertTaskSessionBinding,
   // Spear 对齐器
   getOrphanNodes, blockDownstream,
   // 审计

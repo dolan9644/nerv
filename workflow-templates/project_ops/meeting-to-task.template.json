@@ -1,0 +1,70 @@
+{
+  "template_id": "meeting-to-task",
+  "version": "1.0",
+  "domain": "project_ops",
+  "summary": "会议转任务流：把会议纪要、妙记或手工记录整理成结构化任务清单和状态摘要。",
+  "routing_hint": "dag",
+  "session_strategy": "task_scoped",
+  "execution_modes": ["manual_minutes"],
+  "default_execution_mode": "manual_minutes",
+  "inputs": {
+    "required": ["meeting_meta", "meeting_source", "output_goal"],
+    "optional": ["participants", "existing_tasks", "priority_rules", "must_include", "must_avoid"],
+    "schema_ref": "docs/meeting-to-task-pack-spec-v1.md"
+  },
+  "platform_requirements": "not_applicable",
+  "capability_gate": {
+    "missing_required_inputs_behavior": "tool_gap",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "missing_meeting_inputs"
+  },
+  "delivery": {
+    "final_owner": "nerv-misato",
+    "notifier": "adam_notifier",
+    "memory_writeback": true
+  },
+  "acceptance": {
+    "tasks_json_requires_owner_and_deadline": true,
+    "status_report_requires_blockers_and_next_steps": true
+  },
+  "planned_nodes": [
+    {
+      "node_id": "normalize-meeting-tasks",
+      "family": "normalize",
+      "canonical_owner": "nerv-eva00",
+      "description": "从会议输入中提取行动项、负责人、优先级和截止时间。",
+      "input_artifacts": ["manual_input.json"],
+      "output_artifacts": ["task_candidates.json", "owner_map.json"]
+    },
+    {
+      "node_id": "compose-task-report",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "生成任务清单和项目状态摘要。",
+      "input_artifacts": ["task_candidates.json", "owner_map.json"],
+      "output_artifacts": ["tasks.md", "tasks.json", "status_report.md"]
+    },
+    {
+      "node_id": "notify-task-report",
+      "family": "notify",
+      "canonical_owner": "nerv-misato",
+      "description": "交付会议任务清单和状态摘要。",
+      "input_artifacts": ["tasks.md", "tasks.json", "status_report.md"],
+      "output_artifact": "sent.json"
+    },
+    {
+      "node_id": "memory-project-pattern",
+      "family": "memory",
+      "canonical_owner": "nerv-rei",
+      "description": "异步提纯重复 blocker、交接模式和任务表达结构。",
+      "input_artifacts": ["tasks.json", "status_report.md"],
+      "output_artifact": "memory_note.json",
+      "optional": true
+    }
+  ],
+  "edges": [
+    { "from": "normalize-meeting-tasks", "to": "compose-task-report" },
+    { "from": "compose-task-report", "to": "notify-task-report" },
+    { "from": "notify-task-report", "to": "memory-project-pattern" }
+  ]
+}

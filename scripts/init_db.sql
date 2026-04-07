@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   initiator_id    TEXT NOT NULL,                    -- 飞书 user_id / CLI 来源
   intent          TEXT NOT NULL,                    -- 任务意图描述
   priority        INTEGER DEFAULT 0,               -- 0=normal, 1=high, 2=urgent
+  orchestrator_agent_id TEXT DEFAULT 'nerv-misato', -- 当前任务的主编排者
+  orchestrator_session_key TEXT,                    -- 当前任务的编排会话（main / task scoped）
+  session_strategy TEXT DEFAULT 'main'
+    CHECK(session_strategy IN ('main','task_scoped')),
   status          TEXT DEFAULT 'PENDING'
     CHECK(status IN (
       'PENDING',       -- 等待 misato 分解 DAG
@@ -53,6 +57,11 @@ CREATE TABLE IF NOT EXISTS dag_nodes (
   task_id         TEXT NOT NULL,
   agent_id        TEXT NOT NULL,                    -- 分配给哪个 Agent
   description     TEXT,                             -- 节点任务描述
+  session_key     TEXT,                             -- 当前节点的目标执行会话
+  session_scope   TEXT DEFAULT 'main'
+    CHECK(session_scope IN ('main','task')),
+  last_dispatch_id TEXT,                            -- 最近一次派发 attempt 的 dispatch_id
+  last_dispatch_at INTEGER,                         -- 最近一次派发时间
   status          TEXT DEFAULT 'PENDING'
     CHECK(status IN (
       'PENDING',         -- 等待前置依赖完成
@@ -84,6 +93,24 @@ CREATE TABLE IF NOT EXISTS dag_edges (
   from_node       TEXT NOT NULL,                    -- 前置节点
   to_node         TEXT NOT NULL,                    -- 后置节点
   UNIQUE(task_id, from_node, to_node),
+  FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+);
+
+-- ═══════════════════════════════════════════════════════════════
+-- task_session_bindings：task-scoped session 映射表
+-- session 是执行容器，不是任务真相；此表只负责映射 task -> agent -> sessionKey
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS task_session_bindings (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id         TEXT NOT NULL,
+  agent_id        TEXT NOT NULL,
+  node_id         TEXT NOT NULL DEFAULT '',         -- 空字符串表示 task 级绑定（非单节点）
+  session_key     TEXT NOT NULL,
+  session_scope   TEXT NOT NULL
+    CHECK(session_scope IN ('orchestrator','worker')),
+  created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  updated_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  UNIQUE(task_id, agent_id, node_id, session_scope),
   FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
 );
 
@@ -136,12 +163,15 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status       ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_dag_nodes_task     ON dag_nodes(task_id);
 CREATE INDEX IF NOT EXISTS idx_dag_nodes_status   ON dag_nodes(status);
 CREATE INDEX IF NOT EXISTS idx_dag_nodes_agent    ON dag_nodes(agent_id);
+CREATE INDEX IF NOT EXISTS idx_dag_nodes_session  ON dag_nodes(session_key);
 CREATE INDEX IF NOT EXISTS idx_dag_edges_task     ON dag_edges(task_id);
 CREATE INDEX IF NOT EXISTS idx_dag_edges_from     ON dag_edges(from_node);
 CREATE INDEX IF NOT EXISTS idx_dag_edges_to       ON dag_edges(to_node);
 CREATE INDEX IF NOT EXISTS idx_audit_task         ON audit_logs(task_id);
 CREATE INDEX IF NOT EXISTS idx_audit_agent        ON audit_logs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created      ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_task_sessions_task ON task_session_bindings(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_sessions_key  ON task_session_bindings(session_key);
 CREATE INDEX IF NOT EXISTS idx_skill_source_type  ON skill_registry(source_type);
 CREATE INDEX IF NOT EXISTS idx_skill_load_source  ON skill_registry(load_source);
 CREATE INDEX IF NOT EXISTS idx_skill_last_used    ON skill_registry(last_used_at);

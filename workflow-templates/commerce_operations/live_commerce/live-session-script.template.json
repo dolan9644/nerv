@@ -1,0 +1,74 @@
+{
+  "template_id": "live-session-script",
+  "version": "1.0",
+  "domain": "commerce_operations",
+  "subdomain": "live_commerce",
+  "summary": "直播脚本生成流：基于手工输入的商品、卖点、人群和目标，生成可直接使用的直播脚本包。",
+  "routing_hint": "dag",
+  "session_strategy": "task_scoped",
+  "execution_modes": ["manual_input", "manual_input_plus_feedback"],
+  "default_execution_mode": "manual_input",
+  "inputs": {
+    "required": ["session_meta", "product_list", "promotion_and_benefits", "live_goal", "target_audience"],
+    "optional": ["style_constraints", "session_plan", "must_include", "must_avoid", "historical_feedback"],
+    "schema_ref": "docs/live-script-pack-spec-v1.md"
+  },
+  "platform_requirements": "not_applicable",
+  "capability_gate": {
+    "missing_required_inputs_behavior": "tool_gap",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "missing_offer_inputs",
+    "feedback_upgrade_requires_explicit_input": true
+  },
+  "delivery": {
+    "final_owner": "nerv-misato",
+    "notifier": "adam_notifier",
+    "memory_writeback": true
+  },
+  "acceptance": {
+    "offer_pack_requires_real_product_cards": true,
+    "script_requires_sections": ["opening", "per_product_segments", "interaction", "price_beats", "closing"],
+    "selling_points_requires_operator_reviewability": true,
+    "cta_requires_timed_calls_to_action": true
+  },
+  "planned_nodes": [
+    {
+      "node_id": "normalize-offer",
+      "family": "normalize",
+      "canonical_owner": "nerv-eva00",
+      "description": "将手工输入整理成结构化 offer_pack，明确真实商品卡、讲解顺序、异议映射、价格节奏和互动钩子。",
+      "input_artifacts": ["manual_input.json"],
+      "output_artifact": "offer_pack.json"
+    },
+    {
+      "node_id": "compose-script",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "基于 offer_pack 生成主播可直接使用的直播台本、卖点卡和 CTA。",
+      "input_artifact": "offer_pack.json",
+      "output_artifacts": ["script.md", "selling_points.md", "cta.md"]
+    },
+    {
+      "node_id": "notify-script",
+      "family": "notify",
+      "canonical_owner": "nerv-misato",
+      "description": "读取脚本包并通过 Adam Notifier 交付给造物主。",
+      "input_artifacts": ["script.md", "selling_points.md", "cta.md"],
+      "output_artifact": "sent.json"
+    },
+    {
+      "node_id": "memory-script-pattern",
+      "family": "memory",
+      "canonical_owner": "nerv-rei",
+      "description": "异步提纯脚本模式、卖点角度和 CTA 套路。",
+      "input_artifacts": ["script.md", "offer_pack.json"],
+      "output_artifact": "memory_note.json",
+      "optional": true
+    }
+  ],
+  "edges": [
+    { "from": "normalize-offer", "to": "compose-script" },
+    { "from": "compose-script", "to": "notify-script" },
+    { "from": "notify-script", "to": "memory-script-pattern" }
+  ]
+}

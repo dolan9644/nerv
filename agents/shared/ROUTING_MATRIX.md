@@ -21,31 +21,78 @@
 
 ## 路由归一层
 
-为了避免为每个新需求继续堆叠特例，所有任务先收敛到这四个槽位：
+为了避免为每个新需求继续堆叠特例，所有任务先收敛到这五个槽位：
 
 1. **family**：这一步在做什么
    - `translate` / `route` / `collect` / `normalize` / `compose`
    - `review` / `repair` / `deploy` / `memory`
-2. **source**：输入来自哪里
+2. **domain**：这一步服务于什么业务域
+   - `general`
+   - `commerce_operations`
+   - `project_ops`
+   - `finance_info`
+3. **source**：输入来自哪里
    - `web/rss/social`
    - `repo/github/release`
    - `repo/code`
    - `session/db/audit`
    - `file/code`
    - `memory`
-3. **artifact**：最后要产出什么
+4. **artifact**：最后要产出什么
    - `raw.json` / `cleaned.json` / `summary.md`
    - `card` / `patch` / `audit.json`
-4. **risk**：有没有发布、删除、外部写入、未受信代码
+5. **risk**：有没有发布、删除、外部写入、未受信代码
    - `low` / `medium` / `high`
 
 ### 判定顺序（强制）
 
 1. 先归 `family`
-2. 再按 `source` 选主责 Agent
-3. 再校验 `artifact` 与 `risk`
-4. 只有主责 Agent 明确返回 `TOOL_GAP` / `NODE_FAILED`，且原因是能力缺口时，才允许 fallback
-5. 对于 `repo/github/release` 报告类采集，若 `mari` / `eva-03` 全部不可达，允许 `nerv-shinji` 直接执行固定 collector script 作为 self-fallback；必须记录 `fallback_reason = frontline_data_collectors_unavailable`
+2. 再归 `domain`
+3. 再按 `source` 选主责 Agent
+4. 再校验 `artifact` 与 `risk`
+5. 只有主责 Agent 明确返回 `TOOL_GAP` / `NODE_FAILED`，且原因是能力缺口时，才允许 fallback
+6. 对于 `repo/github/release` 报告类采集，若 `mari` / `eva-03` 全部不可达，允许 `nerv-shinji` 直接执行固定 collector script 作为 self-fallback；必须记录 `fallback_reason = frontline_data_collectors_unavailable`
+
+### 为什么加 `domain`
+
+`family/source/artifact/risk` 能回答“这一步在做什么”。
+但当系统开始覆盖社媒、电商、直播、项目协作、财经信息时，还需要回答：
+
+- 这一步服务于哪个业务域
+- 同样是 `collect`，是在抓微博热搜、直播评论、商品评价，还是 GitHub PR
+- 同样是 `compose`，是在写直播脚本、平台文案、项目周报，还是财讯摘要
+
+对当前 NERV 来说，和“运营”相关的工作应统一归入 `commerce_operations`。
+其中再按 workflow / skill pack 细分为：
+
+- `social_media`
+- `live_commerce`
+- `ecommerce_ops`
+
+`domain` 的作用不是替代角色边界，而是避免把行业能力硬塞进 SOUL。
+行业扩张优先通过 `domain + skill_pack + workflow_template` 完成，而不是继续膨胀 Agent prompt。
+
+## Domain × Family 快速映射（v1）
+
+| domain | 常见 family | 默认主责 | 说明 |
+|:-------|:------------|:---------|:-----|
+| `general` | `route` / `compose` / `memory` / `review` | `nerv-misato` / `nerv-eva13` / `nerv-rei` / `nerv-kaworu` | 不属于明确业务域的通用任务 |
+| `commerce_operations` | `collect` | `nerv-mari` / `nerv-shinji` | 平台公开页、评论页、账号页、商品页抓取；报告型 repo 数据默认先进数据 lane |
+| `commerce_operations` | `monitor` | `nerv-eva02` | RSS / 已接入信号的热点、账号、商品、竞品、评论变化监控；不含浏览器搜索 |
+| `commerce_operations` | `search` | `nerv-eva03` | 证据补充、竞品补搜、工具发现；当监控节点需要搜索能力时，由此接管，不当默认主工人 |
+| `commerce_operations` | `normalize` | `nerv-eva00` | 去重、打标、聚类、评分、评论桶化、题材排序 |
+| `commerce_operations` | `compose` | `nerv-eva13` | 平台文案、脚本、日报、卡片、卖点成稿 |
+| `project_ops` | `translate` / `route` | `nerv-gendo` / `nerv-misato` | 目标拆解、资源优先级、任务收口 |
+| `project_ops` | `compose` / `memory` | `nerv-eva13` / `nerv-rei` | 周报、纪要、复盘、SOP 沉淀 |
+| `finance_info` | `monitor` | `nerv-eva02` | 财讯、政策、观察名单变化提醒 |
+| `finance_info` | `collect` / `search` | `nerv-shinji` / `nerv-eva03` | 信息流采集与证据补充 |
+| `finance_info` | `compose` | `nerv-eva13` | 财讯摘要、政策卡片、晚报 |
+
+补充：
+
+- `commerce_operations` 是一级业务域，内部再细分为 `social_media` / `live_commerce` / `ecommerce_ops`
+- `project_ops` 默认不引入前线采集终端，除非任务明确需要外部证据
+- `finance_info` 只做信息服务，不做投资建议，不把 Agent 扩成交易顾问
 
 ### 交付模式
 

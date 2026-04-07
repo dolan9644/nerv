@@ -34,11 +34,16 @@
 <p align="center">
   <a href="#-这套系统适合谁">🎯 适合谁</a> ·
   <a href="#-30-秒感受多-agent-的力量">⚡ 30 秒体验</a> ·
+  <a href="#-从用户视角看任务怎么流动">🧭 任务流</a> ·
+  <a href="#-什么是-dag为什么要用-dag">🕸️ DAG</a> ·
   <a href="#-为什么不一样">💡 为什么不一样</a> ·
   <a href="#-magi-戰情室-v30">📋 MAGI 战情室</a> ·
   <a href="#-harness-engineering-物理安全矩阵">🛡️ Harness</a> ·
   <a href="#-三柱指挥体制">🏛️ 三柱体制</a> ·
   <a href="#-全员阵列">👥 全员阵列</a> ·
+  <a href="#-领域扩张路线-v1">🌐 领域扩张</a> ·
+  <a href="#-真实循环案例">🎬 实战案例</a> ·
+  <a href="#-终态通知与失败收敛原则">📣 通知与收敛</a> ·
   <a href="#-自进化引擎marduk-機関-v2">🧬 自进化引擎</a>
 </p>
 
@@ -123,53 +128,181 @@ NERV 消灭了这个问题。你只负责下达战略指令，15 个专职机体
 > 在真实运行里，节点 owner 由角色矩阵决定，不由“谁恰好能用某个 skill”决定。
 > `compatible_agents` 是能力过滤器，不是最终 owner。
 > 在当前分离入口模式下，Gendo 默认只负责产出可转交草案，不会自动替你把任务送到 Misato；你确认后再把方案复制给 Misato 执行。
+> Misato 是稳定接单入口：先异步派发 ready 节点，再在同一轮末尾立即回复你 `task_id / 已派发节点 / 等待节点`，最终结果通过 Adam Notifier 主动推送。
+
+---
+
+## 🧭 任务流与 DAG
+
+NERV 的现状不是“一个更会聊天的 Agent”，而是把复杂任务拆成一条可验证、可并行、可回放的编排链。早期或传统 Agent 模式最容易掉进两个坑：一是人类自己当胶水，在不同 Agent 输出之间手动搬运数据；二是把所有步骤硬塞进一个臃肿上下文里，结果一改就崩、幻觉四起。现在这套架构已经不再靠堆 Prompt 硬抗复杂度，而是靠系统工程把意图、编排、执行、审计拆开。
+
+从体系上看，NERV 现在更像“四层物理隔离 + 三柱体制”。`Gendo` 负责把自然语言需求翻成结构化草案，`Misato` 负责把草案编排成任务流并收口终态，`Seele` 负责审计、风险和底层秩序。15 台 EVA 机体不再是全能保姆，而是边界极清晰的特种兵。简单查询走快通道，复杂工程走 DAG 编排；可观测性、审计、熔断、重试都进入控制面，而不是继续藏在模型上下文里。
+
+### 标准用法
+
+1. **先判断这是“拆解题”还是“执行题”**
+   - 目标还模糊、工具不确定、你想先看方案：找 **Gendo**
+   - 目标已经明确、你要直接开干、你想查进度：找 **Misato**
+
+2. **Gendo 负责把自然语言翻成结构化草案**
+   - 业务域是什么
+   - 要产出什么 artifact
+   - 节点大致怎么拆
+   - 哪些地方可能有 TOOL_GAP
+   - 如果需求对风格、Hook、脚本完成度高度敏感，先补问再出草案
+
+3. **你确认草案，再转交给 Misato**
+   - 当前 NERV 采用分离入口
+   - `Gendo` 默认不替你自动下发执行
+
+4. **Misato 创建 `task_id`，实例化 DAG**
+   - 只实例化当前真的可执行的节点
+   - 入口节点统一 fire-and-forget 异步派发
+   - 同一轮末尾立即告诉你：
+     - `task_id`
+     - 已派发节点
+     - 等待节点
+     - 最终结果是否通过 Adam 推送
+
+5. **节点在后台异步推进**
+   - 前线机体完成后，用 `NODE_COMPLETED / NODE_FAILED` 回报
+   - Recorder 写入 `nerv.db`
+   - Spear 负责巡检孤岛、漏调度、异常节点
+
+6. **结果收口**
+   - 成功：Adam Notifier 推送最终交付
+   - 失败：明确告诉你卡在哪一层
+   - 可复用经验：Rei 异步沉淀
+
+### 让系统进入 DAG 的口令
+
+如果你要的是“走 NERV 工作流”，不要只说需求本身，要明确加上这类口令：
+
+- `先给我 DAG 草案，再交给 Misato 执行`
+- `按 DAG 方式处理`
+- `把这件事拆成任务流`
+- `不要直接成稿，先编排成工作流`
+
+如果你只说“帮我写一段文案 / 脚本 / 口播”，系统可能会直接单轮输出。
+如果你显式要求 DAG，`Gendo` 才会先产草案，`Misato` 才会按编排链路跑。
+
+### 你真正需要提供的东西
+
+NERV 最怕的不是复杂，而是输入含糊。用户侧输入尽量说清这四件事：
+
+- **目标**：你最终想拿到什么
+- **输入**：你已经有的数据、文件、链接、商品信息
+- **约束**：时间、风格、风险边界、平台边界
+- **交付物**：你希望最终看到什么文件或通知
+
+例如：
+
+- 社媒内容：你要的是微博短文案、小红书长文案、抖音脚本，还是三者都要
+- 直播脚本：你有没有商品清单、价格、福利、人群画像
+- 翻译链路：你要“全文翻译”还是“摘要翻译”，结果写到哪里
+
+### 什么是 DAG
+
+DAG = **有向无环图**。在 NERV 里，它不是装饰性的概念，而是一条现代化工厂的作战流水线：
+
+- **有向**：步骤只能往前推进，谁先谁后是确定的
+- **无环**：不允许互相扯皮、互相等待、无限回圈
+- **图**：它不是单行道，而是一张可以分叉、并行、汇合的网
+
+放进 NERV 之后，DAG 的含义非常具体：
+
+- **节点（Node）**：每个节点只做一件极度具体的事
+- **边（Edge）**：边决定依赖关系，谁必须等谁完成
+- **终态（Terminal State）**：任务完成与否，由节点终态和数据库收敛，不由一句“我做完了”决定
+
+例如一条典型链路：
+
+```text
+采集 → 清洗 → 成稿 → 通知 → 记忆沉淀
+```
+
+写成 DAG 之后，系统才能知道：
+
+- 哪些节点可以并行
+- 哪些节点必须等待
+- 哪个节点失败会阻塞下游
+- 哪个节点完成后应该触发谁
+
+### 为什么 NERV 必须用 DAG
+
+引入 DAG，不是为了“显得高级”，而是为了把控制权从随机对话里拿回来。
+
+如果不用 DAG，就会发生三件事：
+
+1. **所有步骤塞进一个上下文**
+   - 抓取、清洗、写稿、通知混在一起
+   - 一处出错，整条上下文污染
+
+2. **无法准确回收状态**
+   - 你不知道是单个节点做完了，还是整条任务做完了
+   - 也不知道后续为什么没继续跑
+
+3. **无法稳定复用**
+   - 下次要做类似任务，只能重写一遍 prompt
+   - 无法沉淀成模板、规则和可审计的经验
+
+相比单 Agent 模式，DAG 能把失败限制在局部节点；相比很多“多 Agent 开圆桌会”的框架，DAG 不允许机体互相扯皮到失控。我们允许机体在自己的节点里思考，但任务怎么流转、谁先谁后、什么时候结束，必须由这条冷冰冰的物理铁轨决定。
+
+### DAG 在 NERV 里的实际应用
+
+当系统接到一条复杂任务，比如“每天抓取并生成 AI 晨报”，它不会直接把所有要求丢给一个大模型，而是：
+
+1. **任务切片**
+   - `Mari` 去抓站点
+   - `EVA-03` 去补公开搜索
+   - `EVA-00` 做清洗与合并
+   - `EVA-13` 负责成稿
+   - `Misato` 负责通知与收口
+
+2. **并行出击**
+   - 抓取和补证据可以并行
+   - 只有依赖汇聚时才进入下一步
+
+3. **状态落库**
+   - `tasks + dag_nodes + audit_logs` 才是真相源
+   - 聊天消息只是表象，不是事实
+
+4. **用完即毁**
+   - 节点级上下文执行完就结束
+   - 不把脏上下文继续带进下一环
+
+### 当前 NERV 里最重要的三个原则
+
+1. **不是每条 DAG 都要让所有 Agent 出场**
+2. **节点 owner 先看职责，再看 skill**
+3. **DAG 的真相源是 `tasks + dag_nodes`，不是聊天消息本身**
 
 ---
 
 ## 💡 为什么不一样
 
-大多数多 Agent 系统的做法：
+前面的「任务流与 DAG」已经解释了 NERV 怎么拆任务；这里补的是另一层差异：**我们不是把更多能力塞进同一个大脑，而是把能力沉成可复用的作战体系。**
 
-> "来，写一个超级脚本，爬微博、爬抖音、爬小红书，全部塞进一个文件里。"
->
-> 然后代码越写越烂。改了抖音的逻辑，YouTube 的功能坏了。
-> 加了新平台，500 行代码变 2000 行。Bug 修不完，上下文爆了，大模型开始幻觉。
+传统做法往往是：
 
-**这就是传统模式的死亡螺旋：越全能的脚本越脆弱，越专一的 Agent 越强悍。**
+- 把采集、清洗、成稿、通知塞进一个大脚本
+- 或者让多个 Agent 在对话里互相讨论下一步
+- 结果是一处改动影响全局，状态难追，失败难收，复用成本极高
 
-NERV 的做法完全不同。我们不写全能脚本——我们编排专职 Agent 蜂群：
+NERV 的做法是把复杂度拆到系统层：
 
-```
-你: "帮我抓取抖音热门视频，整理成分析报告"
-                        ↓
-            碇源堂（战略顾问）
-            "抖音需要专用工具，让我找找..."
-                        ↓ TOOL_SEARCH
-            EVA-03（工具猎人）
-            "GitHub 上找到 douyin-dlp，star 2800，依赖简单"
-                        ↓ 安全审查（强制）
-            渚薰（安全审查）
-            "代码安全，准许部署"
-                        ↓ 推荐
-            碇源堂 → 你
-            "推荐使用 douyin-dlp，是否批准？"
-                        ↓ 用户确认
-            赤木律子（代码编排）
-            "标准 I/O 适配器编写完成，adapter_lint 校验通过"
-                        ↓
-            EVA-01（部署终端）
-            "Docker 构建完成，--network none 沙箱部署"
-                        ↓
-            明日香（调试测试）
-            "Dry-Run 通过，输出符合 JSON Schema"
-                        ↓
-    ┌─────────── 从此以后 ───────────┐
-    │ 系统永久学会了抓抖音视频。        │
-    │ 下次再有类似需求，直接走。        │
-    └───────────────────────────────┘
-```
+- `Gendo` 负责把自然语言收成结构化草案
+- `Misato` 负责把草案建成可执行 DAG
+- EVA 机体只负责自己的节点，不越权定义整任务终态
+- `Recorder / Spear / Adam / nerv.db` 负责状态、巡检、通知和收敛
 
-**每个 Agent 只做一件事，通过标准化 I/O 像搭积木一样组合出任意复杂的工作流。**
+这带来三个直接结果：
+
+1. **功能扩张不再等于上下文膨胀**
+2. **失败可以局部隔离、局部重试，而不是整条链重来**
+3. **一条跑通的 DAG 能沉成模板、Skill 和验收标准，后续直接复用**
+
+一句话说：**NERV 不是靠 Prompt 把模型逼成万能工具，而是用 Harness Engineering 把大模型规训成可靠节点。**
 
 ---
 
@@ -251,7 +384,7 @@ cd ~/.openclaw/nerv/magi && npx vite --host
 | 机制 | 防线 | 说明 |
 |:-----|:-----|:-----|
 | 🔐 文件 I/O | 输入隔离 | 所有工具通过 `sandbox_io/<task_id>/input.json` 传参，杜绝 Bash 注入 |
-| 🐳 Docker 沙箱 | 物理隔离 | exec 强制 sandbox，discovered 工具独立 Dockerfile |
+| 🐳 Docker 沙箱 | 可选增强 | 高风险执行节点可启用独立容器；当前默认以宿主机执行为主 |
 | 🔌 物理断网 | 网络隔离 | discovered 工具 `docker run --network none`，需联网须 SEELE L4 审批 |
 | 🛡️ 零信任校验 | 输出校验 | 强类型中文报错 + 重试引导，不信任任何 LLM 原始输出 |
 | ⚡ 并发安全 | 数据库 | SQLite WAL + busy_timeout 5000ms + withRetry 指数退避 |
@@ -332,7 +465,7 @@ NERV 是自进化的——遇到不会的事，它自己去找工具、审查、
               ↓ 用户确认
           ritsuko: 编写符合标准 I/O 的适配器 (Adapter) 代码
               ↓
-          eva-01: 独立 Dockerfile 封装与沙箱部署（物理隔离）
+          eva-01: 独立执行环境封装与隔离部署（必要时 Docker）
               ↓
           asuka: 构造虚拟 input.json 进行空载测试 (Dry-Run)
               ↓ 测试通过
@@ -388,16 +521,19 @@ SELECT * FROM skill_registry
 ### 安装
 
 ```bash
-git clone https://github.com/你的用户名/nerv.git ~/.openclaw/nerv
-cd ~/.openclaw/nerv
+git clone https://github.com/你的用户名/nerv.git
+cd nerv
 chmod +x install.sh && ./install.sh
 openclaw restart
 ```
 
 安装脚本自动完成：
+- ✅ 如果当前仓库不在 `~/.openclaw/nerv`，自动同步到标准路径后继续安装
 - ✅ 注册 15 个 NERV Agent 到 `openclaw.json`
 - ✅ 初始化 `nerv.db`（SQLite WAL 模式 + 8 张表 + 种子 Skill）
 - ✅ **Schema 自动迁移**——旧版数据库自动补齐新列（`ALTER TABLE`）
+- ✅ 写入 `skills.load.extraDirs`，统一发现 `nerv/skills` 与 workflow skills
+- ✅ 刷新 Skill 注册表并生成安装后验证快照
 - ✅ **注册 Cron Job**（Spear 巡检 / SEELE 安全 / Rei 提纯 / Adam 通知）
 - ✅ 备份你的原始 `openclaw.json`（可一键恢复）
 - ✅ 不影响你现有的任何 Agent
@@ -491,22 +627,22 @@ FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/你的webhook-id
 
 | 机体 | 代号 | 职责 | 权限 |
 |:-----|:-----|:-----|:-----|
-| 🔬 赤木律子 | `nerv-ritsuko` | 代码 Pipeline 编排 · 质量验收 | read, write, exec (sandbox) |
-| ⚡ 碇真嗣 | `nerv-shinji` | 数据 Pipeline 编排 · Schema 锚点 | read, write, exec (sandbox), memory_search |
+| 🔬 赤木律子 | `nerv-ritsuko` | 代码 Pipeline 编排 · 质量验收 | read, write, exec |
+| ⚡ 碇真嗣 | `nerv-shinji` | 数据 Pipeline 编排 · Schema 锚点 | read, write, exec, memory_search |
 | 🌙 绫波零 | `nerv-rei` | 记忆守护 · 向量检索 · Skill GC · 损坏文件隔离 | read, write, memory_search |
 
 ### 作战层（一次性电池）
 
 | 机体 | 代号 | 职责 | 特殊能力 |
 |:-----|:-----|:-----|:---------|
-| 🔥 式波明日香 | `nerv-asuka` | 代码调试 · Bug 定位 | exec (sandbox) |
+| 🔥 式波明日香 | `nerv-asuka` | 代码调试 · Bug 定位 | exec |
 | 🎵 渚薰 | `nerv-kaworu` | 代码审查 · 安全审计 | 三层 Skill 矩阵 (codex/gstack/aider) |
 | 🕷️ 真希波 | `nerv-mari` | 爬虫采集 · 平台适配 | exec, 403 退避协议 |
 | 📡 二号机 | `nerv-eva02` | 舆情监控 · 趋势预警 | read, write |
 | 🔍 三号机 | `nerv-eva03` | **深度搜索 + 工具发现** | exec (gh CLI), 双模式 |
 | 🧹 零号机 | `nerv-eva00` | 数据清洗 · 字段白名单 · 完整性评分 | read, write |
 | ✍️ 十三号机 | `nerv-eva13` | 文案生成 · 多语言 | read, write |
-| 🛠️ 初号机 | `nerv-eva01` | 部署运维 · Docker | exec (sandbox), 幂等部署 |
+| 🛠️ 初号机 | `nerv-eva01` | 部署运维 · Docker / 宿主机工具链 | exec, 幂等部署 |
 | 🎨 量产机 | `nerv-eva-series` | 视觉生成 · 配图 | read, write, image-gen |
 
 ### 神明节点（功能函数，非 Agent）
@@ -515,7 +651,140 @@ FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/你的webhook-id
 |:-----|:-----|:---------|
 | 亚当 (Adam) | `adam_notifier.py` 飞书 Webhook | ① 审批推送：SEELE 标记风险 → 推送待审批卡片 ② **任务交付**：DAG 完成 → 推送结果通知。造物主的唯一信使 |
 | 莉莉丝 (Lilith) | Cron 脚本 | 每日 03:00 备份 nerv.db |
-| 朗基努斯之枪 (Spear) | `spear_sync.js` 状态对齐 | 每 5 分钟扫描孤岛/漏调度/环路/异常节点自动重调度 |
+| 朗基努斯之枪 (Spear) | `spear_sync.js` 状态对齐 | 每 5 分钟扫描孤岛/漏调度/环路/异常节点，负责发现和标记异常 |
+
+---
+
+## 🌐 领域扩张路线 v1
+
+NERV 的下一阶段，不靠继续新增 Agent，也不靠把 prompt 写成百科全书。
+
+我们用三层扩张：
+
+1. **Domain**
+   - 先回答“这是哪一类业务”
+2. **Skill Pack**
+   - 再回答“这类业务常用哪些能力包”
+3. **Workflow Template**
+   - 最后回答“这类业务该怎么编排成 DAG”
+
+### 一级领域
+
+| 一级 domain | 内部分支 | 说明 |
+|:------------|:---------|:-----|
+| `general` | - | 通用任务、通用内容、通用协作 |
+| `commerce_operations` | `social_media` / `live_commerce` / `ecommerce_ops` | 运营相关需求统一归这里，不拆成三套互不相认的系统 |
+| `project_ops` | - | 多项目、资源、纪要、排期、状态流 |
+| `finance_info` | - | 财讯、政策、观察名单、信息服务 |
+
+### 五维路由
+
+后续所有需求统一先落到五个槽位：
+
+- `family`
+- `domain`
+- `source`
+- `artifact`
+- `risk`
+
+这意味着：
+
+- `Gendo` 先识别业务域，再出结构化草案
+- `Misato` 再按路由矩阵做最终 owner 校验
+- `compatible_agents` 只回答“谁能用”，不回答“谁最该做”
+
+### 第一波优先级
+
+第一波先做：
+
+- `commerce_operations / social_media`
+
+原因：
+
+- 最贴近真实用户
+- 最容易验证“采集 -> 清洗 -> 成稿 -> 通知 -> 记忆”的完整闭环
+- 最适合在真实使用和开源复用之间取得平衡
+
+### 角色扩张的原则
+
+- **Gendo**：扩“业务目标翻译”，不扩执行权
+- **Misato**：扩“跨 workflow 编排”，不扩内容生产
+- **Shinji**：扩“业务数据 lane”，不扩成前线采集工
+- **Mari / Eva-02 / Eva-03**：扩前线数据面，但各守边界
+- **Eva-00 / Eva-13**：扩加工和成稿，不扩路由
+- **Rei**：扩 SOP 和经验资产，不扩主状态职责
+
+一句话：
+
+> 人格少变，Domain 增加，Skill Pack 增加，Workflow Template 增加。
+
+### 最近已经补进来的能力骨架
+
+这批不是停留在设想层，而是已经进入当前体系的结构化资产：
+
+- **社媒域**
+  - `social-listening-pack`
+  - `platform-collector-pack`
+  - `topic-ranking-pack`
+  - `social-copy-pack`
+  - 三种执行模式：`signal_only / signal_plus_collect / platform_smoke`
+
+- **直播域**
+  - `live-script-pack`
+  - `replay-summary-pack`
+  - `objection-handling-pack`
+  - `livestream-monitor-pack`
+
+- **工作流模板**
+  - `social-topic-daily`
+  - `hot-topic-watch`
+  - `viral-breakdown`
+  - `xiaohongshu-smoke`
+  - `live-session-script`
+  - `live-replay-summary`
+  - `live-objection-bank`
+
+- **运行面真相源**
+  - 平台能力目录（哪些平台是 `ready / partial / gap`）
+  - 任务实例化时先查能力，再决定是否建 DAG
+  - 不再假设“会话里能说出来的能力就一定能跑”
+
+当前第一批固定资产位于：
+
+- `skill-packs/commerce_operations/social_media/`
+- `workflow-templates/commerce_operations/social_media/`
+
+### 怎么用中文触发这些新能力
+
+用户不需要记内部英文名。真正该说的是中文任务语境，系统再把它翻成对应 workflow。
+
+| 你会直接说的话 | 系统应命中的 workflow | 最少还要补什么 |
+|:--|:--|:--|
+| `帮我复盘昨天那场直播` / `把这场直播的问题和下次优化点整理出来` | `live-replay-summary` | 直播背景、复盘目标、评论/数据/笔记三者至少一类 |
+| `把这场直播的脚本做出来` / `给我一套能直接上播的话术` | `live-session-script` | 商品信息、价格/福利、人群、风格约束 |
+| `把这批商品评价整理成洞察` / `做一版 SKU 卖点简报` | `product-review-insight` | 商品信息、评价文本或截图路径、分析目标 |
+| `把这段会议纪要转成任务清单` / `把周会内容拆成 owner 和 deadline` | `meeting-to-task` | 会议来源、参会人、行动项上下文 |
+| `给我做一版今天的财讯简报` / `看一下这只股票最近有什么值得关注` | `finance-brief` | 范围、时间窗、观察重点，或已知事实 |
+| `给微博/小红书/抖音各出一版内容` / `按不同平台分别写` | `social-copy-studio` | 平台、内容目标、受众、风格、是否先出草案 |
+
+如果你要系统先编排再执行，最好直接加一句：
+
+- `先给我 DAG 草案，再交给 Misato 执行`
+
+如果你已经知道要直接开跑，可以说：
+
+- `按 DAG 方式处理`
+
+如果输入里提到了截图、图片、附件，别只说“我发过图了”，最好直接给：
+
+- 文件绝对路径
+- 或者图片里的文字内容
+
+否则 DAG 可能能建出来，但会在读取输入时卡住。
+
+更完整的中文触发映射见：
+
+- [`docs/workflow-trigger-phrases-v1.md`](docs/workflow-trigger-phrases-v1.md)
 
 ---
 
@@ -577,18 +846,192 @@ Heartbeat 只做**兜底容灾**：
 
 ---
 
+## 🎬 真实循环案例
+
+下面这些不是概念演示，而是已经在当前体系里真实跑过、并且反过来修正过架构的案例。
+
+### 1. 直播脚本链路：`live-session-script`
+
+目标：
+
+- 用户手工提供商品清单、卖点、福利、目标人群、直播目标
+- 系统生成：
+  - `offer_pack.json`
+  - `script.md`
+  - `selling_points.md`
+  - `cta.md`
+
+当前主链：
+
+```
+eva00（归一化商品包） → eva13（成稿） → misato（通知） → rei（异步记忆）
+```
+
+这条链的价值不在于“自动控制平台”，而在于先把直播业务里最核心、最稳定的一段跑通：
+
+- 输入天然可控
+- 不依赖平台采集
+- 不依赖浏览器自动化
+- 最适合先验证 `manual_input` 模式
+
+这也是 NERV 在 `live_commerce` 的第一条正式路线。
+
+### 2. 晨报链路：`daily-rss-intelligence`
+
+目标：
+
+- 聚合过去 24 小时的 RSS / 已接入信息
+- 清洗、去重、排序、翻译
+- 生成晨报并推送
+
+典型主链：
+
+```
+原始信号 → clean_rank → translate → featured_select → compile + notify
+```
+
+这条链已经证明了两件事：
+
+1. **DAG 非常适合信息型任务**
+   - 采集、清洗、翻译、汇总天然就是多节点链路
+
+2. **失败不一定是 Cron 失败**
+   - 真正的问题可能是模型超时
+   - 也可能是某个中间节点卡住
+   - 所以用户不能只看“今天有没有推送”，还要看任务终态和节点状态
+
+### 3. 翻译链路：网页抓取 → 翻译 → 写入
+
+目标：
+
+- 抓网页全文和图片
+- 翻成中文
+- 最终写入知识库或文档系统
+
+真实链路里，已经暴露出两个非常典型的问题：
+
+1. **节点完成 ≠ 整条任务完成**
+   - `mari-fetch` 完成，只代表抓取节点完成
+   - 不代表翻译和写入已经完成
+
+2. **抓取成功 ≠ 下游一定能消费**
+   - 如果上游直接把体积过大的 HTML 交给下游
+   - 下游会因为输入不合适而拒绝
+
+这个案例很重要，因为它逼着系统把“通知边界”和“中间 artifact 契约”写清楚，而不是只靠会话感觉往下走。
+
+### 4. 小红书 Smoke：平台能力验证，不等于正式业务能力
+
+这条链的意义不是“系统已经彻底会做小红书运营”，而是：
+
+- 验证浏览器 / MCP 路径是否能跑
+- 验证平台风控、验证码、登录态会不会把链路拦住
+
+因此：
+
+- Smoke 成功，只代表能力路径被验证
+- 不代表该平台已经升级成正式 `collect` 主链能力
+
+这也是为什么 NERV 需要单独维护**平台能力目录**，而不是把 smoke 成功误判成正式生产能力。
+
+---
+
+## 📣 终态通知与失败收敛原则
+
+这是最近真实运行里最值得记住的一组原则。
+
+### 1. 节点完成通知，不等于任务完成通知
+
+用户真正该看的有两层：
+
+- **节点层**
+  - 哪个机体完成了自己那一段
+  - 这是进度信号
+
+- **任务层**
+  - 整条 DAG 是否真正进入终态
+  - 这是交付信号
+
+NERV 的原则应该始终是：
+
+- `NODE_COMPLETED` = 节点回报
+- `DAG_COMPLETE` = 整条任务收口
+- 用户最终以**任务终态**为准
+
+### 2. 真相源不在聊天窗口，在数据库
+
+真正决定任务是否完成的，不是某句“做完了”，而是：
+
+- `tasks.status`
+- `dag_nodes.status`
+- `audit_logs`
+
+聊天消息只是观察面，不是真相源。
+
+### 3. 失败要明确落在哪一层
+
+失败不能只说“没跑起来”，而要说明：
+
+- **输入层失败**
+  - 缺商品清单、缺信号源、缺关键参数
+
+- **能力层失败**
+  - 平台能力是 `gap / partial`
+  - 浏览器/MCP 不可达
+  - 工具权限不足
+
+- **节点层失败**
+  - 上游完成了，但下游没被触发
+  - 或下游收到的 artifact 不符合契约
+
+- **模型层失败**
+  - LLM 超时
+  - 模型不可用
+
+### 4. Misato、Recorder、Spear、Adam 的分工必须清楚
+
+- **Misato**
+  - 接单、建图、派发、收尾
+
+- **Recorder**
+  - 记录 `NODE_COMPLETED / NODE_FAILED`
+  - 把事件写入 `nerv.db`
+
+- **Spear**
+  - 巡检孤岛、漏调度、异常节点
+  - 负责兜底，不是主业务编排器
+
+- **Adam**
+  - 对外通知
+  - 是信使，不是 DAG 判断器
+
+### 5. 当前体系的收敛目标
+
+NERV 后续的所有 workflow，都要朝这个方向收敛：
+
+1. **先判断能不能跑**
+2. **再建 DAG**
+3. **节点终态由标准事件回收**
+4. **任务终态由 DB 收敛**
+5. **最终由 Adam 统一对外交付**
+
+热血可以保留，判断不能含糊。
+
+---
+
 ---
 
 ## 対領域 (A.T.Field)
 
-每个 Agent 在物理层面完全隔离：
+每个 Agent 在运行层面尽量隔离：
 - 独立 workspace · 独立 SOUL.md · 独立 session 上下文
 - 通信只通过 `sessions_send`，消息即时化
 - misato **无状态上下文注入**：不依赖 Session 历史，启动时读取 `MEMORY.md` + 最近 3 天 `memory/` 作为战术简报
 - 作战层 Agent 是一次性电池：完成即销毁，不污染上下文
 - 系统开启自动 compaction，防止上下文无限增长
+- 默认以宿主机执行为主；sandbox / 容器隔离只在运行面确认可用时启用，不做配置层面的虚假承诺
 
-这不是 metaphor，这是真正的 A.T.Field——**绝对领域的隔离边界**。
+这不是 metaphor，而是 NERV 当前的运行边界模型：**独立上下文 + 任务契约 + DB 真相源**。
 
 ---
 
@@ -617,9 +1060,28 @@ NERV 的长期记忆系统：
 | 工具发现 | MARDUK v2（GitHub CLI + Web Search + 安全审查） |
 | 物理安全 | seele_breaker.js + adapter_lint.js + schema_validator.py |
 | 战情室 | React + Vite · SSE 实时推送 · 六角几何 UI |
-| 代码沙箱 | Docker (`--rm --network none`) |
+| 代码沙箱 | 宿主机执行（默认） · Docker（可选增强） |
 | 长期记忆 | LanceDB / Obsidian MCP |
 | Skill 路由 | nerv.db → skill_registry（native + discovered 分层）|
+
+---
+
+## 参考与致谢
+
+NERV 在公开设计上明确参考了以下开源项目，但不把它们作为直接运行时依赖：
+
+- [agency-agents](https://github.com/msitarzewski/agency-agents)
+  - 用于职业角色、交付物结构、交接模板与阶段手册的设计参考
+  - 不直接复刻其 agent 架构或整份提示词
+- [OpenHarness](https://github.com/HKUDS/OpenHarness)
+  - 用于 Agent Harness 的任务、权限、技能发现与安装体验参考
+  - 不替代 OpenClaw，也不直接引入其 provider stack、TUI 或 agent loop
+
+更具体的吸收方式和差异说明见：
+
+- [`docs/external-references.md`](./docs/external-references.md)
+- [`docs/external-reference-matrix.md`](./docs/external-reference-matrix.md)
+- [`docs/openharness-adoption-matrix.md`](./docs/openharness-adoption-matrix.md)
 
 ---
 

@@ -83,7 +83,7 @@ const RAW_INFRA_JOBS = [
     id: 'nerv-session-recorder',
     name: 'Session 日志录入',
     timeout_seconds: 120,
-    schedule: { kind: 'interval_minutes', minutes: 5 },
+    schedule: { kind: 'interval_minutes', minutes: 1 },
     command: [PYTHON_BIN, path.join(NERV_ROOT, 'scripts', 'session_recorder.py')]
   }
 ];

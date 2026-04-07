@@ -84,6 +84,25 @@ async function getNodeContract(taskId, nodeId, cache) {
 }
 
 async function getLatestDispatchMeta(taskId, nodeId) {
+  const nodeRow = await withRetry((db) => {
+    return db.prepare(`
+      SELECT agent_id, session_key, last_dispatch_id, last_dispatch_at
+      FROM dag_nodes
+      WHERE task_id = ? AND node_id = ?
+      LIMIT 1
+    `).get(taskId, nodeId);
+  });
+
+  if (nodeRow?.last_dispatch_id || nodeRow?.session_key) {
+    return {
+      dispatch_id: nodeRow?.last_dispatch_id || null,
+      target_agent: nodeRow?.agent_id || null,
+      session_key: nodeRow?.session_key || null,
+      timeout_seconds: null,
+      created_at: nodeRow?.last_dispatch_at ?? null
+    };
+  }
+
   const row = await withRetry((db) => {
     return db.prepare(`
       SELECT detail, created_at
@@ -150,6 +169,7 @@ async function detectOrphanNodes() {
   for (const node of orphans) {
     const elapsed = Math.floor(Date.now() / 1000) - node.updated_at;
     const runtime = await resolveNodeRuntime(node.task_id, node.node_id, node.agent_id, taskCache);
+    const dispatchMeta = await getLatestDispatchMeta(node.task_id, node.node_id);
     const agentThreshold = runtime.orphanThreshold;
     const staleThreshold = runtime.timeoutSeconds
       ? Math.max(runtime.timeoutSeconds, agentThreshold)
@@ -168,7 +188,9 @@ async function detectOrphanNodes() {
           orphan_threshold_source: runtime.orphanThresholdSource,
           timeout_seconds: runtime.timeoutSeconds,
           stale_threshold_seconds: staleThreshold,
-          dispatch_mode: runtime.dispatchMode
+          dispatch_mode: runtime.dispatchMode,
+          session_key: dispatchMeta.session_key,
+          dispatch_id: dispatchMeta.dispatch_id
         }));
       results.push({
         node_id: node.node_id,
@@ -197,7 +219,9 @@ async function detectOrphanNodes() {
           agent_threshold: agentThreshold,
           orphan_threshold_source: runtime.orphanThresholdSource,
           timeout_seconds: runtime.timeoutSeconds,
-          dispatch_mode: runtime.dispatchMode
+          dispatch_mode: runtime.dispatchMode,
+          session_key: dispatchMeta.session_key,
+          dispatch_id: dispatchMeta.dispatch_id
         }));
     }
   }

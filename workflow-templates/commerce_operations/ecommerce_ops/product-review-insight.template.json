@@ -1,0 +1,84 @@
+{
+  "template_id": "product-review-insight",
+  "version": "1.0",
+  "domain": "commerce_operations",
+  "subdomain": "ecommerce_ops",
+  "summary": "商品评价洞察流：基于评价样本或原始评价数据生成痛点、卖点和 SKU 简报。",
+  "routing_hint": "dag",
+  "session_strategy": "task_scoped",
+  "execution_modes": ["manual_reviews", "manual_reviews_plus_collect"],
+  "default_execution_mode": "manual_reviews",
+  "inputs": {
+    "required": ["product_meta", "review_source", "analysis_goal"],
+    "optional": ["competitor_context", "launch_context", "must_include", "must_avoid", "format_constraints", "review_image_paths", "review_image_text"],
+    "schema_ref": "docs/product-review-insight-spec-v1.md"
+  },
+  "platform_requirements": "not_applicable_for_manual_reviews",
+  "capability_gate": {
+    "missing_required_inputs_behavior": "tool_gap",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "missing_review_inputs",
+    "collect_upgrade_requires_explicit_input": true,
+    "review_images_require_paths_or_text": true
+  },
+  "delivery": {
+    "final_owner": "nerv-misato",
+    "notifier": "adam_notifier",
+    "memory_writeback": true
+  },
+  "acceptance": {
+    "cluster_requires_positive_negative_and_selling_points": true,
+    "insight_requires_operator_ready_summary": true,
+    "sku_brief_requires_reusable_selling_angles": true
+  },
+  "planned_nodes": [
+    {
+      "node_id": "collect-reviews",
+      "family": "collect",
+      "canonical_owner": "nerv-mari",
+      "description": "在公开商品页或评价页可达时补采原始评价数据。",
+      "input_artifacts": ["manual_input.json"],
+      "output_artifact": "raw.json",
+      "optional": true
+    },
+    {
+      "node_id": "cluster-reviews",
+      "family": "normalize",
+      "canonical_owner": "nerv-eva00",
+      "description": "把评价样本收成卖点、痛点和情绪聚类。",
+      "input_artifacts": ["manual_input.json", "raw.json"],
+      "output_artifacts": ["clustered.json", "selling_points.json", "painpoints.json"]
+    },
+    {
+      "node_id": "compose-review-insight",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "生成商品评价洞察和 SKU 简报。",
+      "input_artifacts": ["clustered.json", "selling_points.json", "painpoints.json"],
+      "output_artifacts": ["review_insight.md", "sku_brief.md"]
+    },
+    {
+      "node_id": "notify-review-insight",
+      "family": "notify",
+      "canonical_owner": "nerv-misato",
+      "description": "通过 Adam Notifier 交付商品洞察包。",
+      "input_artifacts": ["review_insight.md", "sku_brief.md"],
+      "output_artifact": "sent.json"
+    },
+    {
+      "node_id": "memory-product-pattern",
+      "family": "memory",
+      "canonical_owner": "nerv-rei",
+      "description": "异步提纯卖点套路和高频负反馈模式。",
+      "input_artifacts": ["clustered.json", "review_insight.md"],
+      "output_artifact": "memory_note.json",
+      "optional": true
+    }
+  ],
+  "edges": [
+    { "from": "collect-reviews", "to": "cluster-reviews" },
+    { "from": "cluster-reviews", "to": "compose-review-insight" },
+    { "from": "compose-review-insight", "to": "notify-review-insight" },
+    { "from": "notify-review-insight", "to": "memory-product-pattern" }
+  ]
+}

@@ -16,6 +16,7 @@
 
 > 路由规则补充：节点归属以 `~/.openclaw/nerv/agents/shared/ROUTING_MATRIX.md` 为准。
 > `skill_registry.compatible_agents` 只能验证“谁能用”，不能直接替代“谁最该做”。
+> 领域扩张补充：优先通过 `domain + skill pack + workflow template` 扩能力，不要把行业 SOP 写进草案。
 
 ---
 
@@ -31,12 +32,84 @@
    c. 需要新工具 → 进入模块二
 3. 先按 ROUTING_MATRIX 将需求拆成节点性质（战略 / 数据 / 代码 / 审计 / 记忆 / 发布）
 4. 为每个节点先给出 `family/source/artifact/risk` 与非绑定的 route note，再用 ROUTING_MATRIX 推导 canonical owner
+   - 先补 `domain`
+   - 当需求属于运营类，统一先归 `commerce_operations`，再细分 `social_media / live_commerce / ecommerce_ops`
    - 这里的 canonical owner 只是一份**可转交建议**
    - 真正发出 DISPATCH 前，misato 必须重新校验并可改写
-5. 判断路由模式:
+   - 当 `domain = commerce_operations` 且 `subdomain = social_media` 时，草案必须额外写出：
+     - `execution_mode`
+     - `target_platforms`
+     - `required_modes`
+     - `required_capabilities`
+     - `approved_adapter_only: true`
+     - `desired_artifacts`
+     - `template_hint`
+   - 这类草案必须声明“平台能力要求”和 `execution_mode`，而不是直接假设平台一定可执行
+5. 优先参考已存在的 workflow template 与 skill pack
+   - 有模板时，先输出“模板化草案”
+   - 没模板时，再输出一次性 DAG 草案
+   - 对于 `commerce_operations / social_media`，优先参考 `~/.openclaw/nerv/agents/misato/SKILLS/` 中的现成 workflow skill
+6. 判断路由模式:
    - 单一任务 + 无前置依赖 + 单机体可完成 → routing_hint = "fast"
    - 多步骤/多机体/有依赖链 → routing_hint = "dag"
-6. 翻译产物 = misato 可直接使用的 STRATEGIC_DISPATCH JSON 草案
+7. 翻译产物 = misato 可直接使用的 STRATEGIC_DISPATCH JSON 草案
+
+补充规则：对 `commerce_operations / social_media` 的内容生产类需求，不要只因为“能写”就直接给出完整草案或完整成稿。
+
+当请求命中以下情况时，优先进入“先澄清、再草案”：
+
+- 同时涉及微博 / 小红书 / 抖音，但没有说明三者风格是否区分
+- 明确提到爆款标题、Hook、吸引人、停留率，但没有说明强度偏好
+- 明确要视频脚本、口播稿、短视频脚本，但没有说明要到 `提纲级 / 可拍摄级 / 可直接录制级`
+- 品类或领域较泛，无法直接继承既有类目语感
+
+对这类需求，你先向造物主补问最少必要问题，再生成草案。
+
+社媒内容类补问优先级：
+
+1. 你更想要 `简洁版` 还是 `详尽版`
+2. 你对 Hook 的偏好是 `克制 / 中等 / 强钩子`
+3. 脚本完成度要到什么级别
+4. 有没有你喜欢的账号、文风或参考样例
+
+如果造物主明确表示“不想先讨论，直接先出一版”，你再退回最小可执行草案；但要在草案中明确写出 `assumptions` 和 `fallback_reason`
+
+中文语境触发规则：
+
+- 造物主不会默认说 `live-replay-summary`、`product-review-insight` 这类英文内部名
+- 你必须优先识别中文任务意图，再映射到对应 workflow/template
+
+高频中文映射：
+
+- `复盘这场直播` / `整理昨天直播的问题和改进点`
+  - 默认映射到 `live-replay-summary`
+- `做一套直播脚本` / `给我能直接上播的话术`
+  - 默认映射到 `live-session-script`
+- `整理商品评价` / `做商品洞察` / `做 SKU 卖点简报`
+  - 默认映射到 `product-review-insight`
+- `把会议纪要转成任务` / `拆 owner 和 deadline`
+  - 默认映射到 `meeting-to-task`
+- `给我一版财讯简报` / `看这只股票最近有什么变化`
+  - 默认映射到 `finance-brief`
+- `给微博、小红书、抖音分别出内容`
+  - 默认映射到 `social-copy-studio`
+
+附件与图片规则：
+
+- 如果造物主提到 `截图 / 图片 / 附件 / 发过图了`，但没有提供绝对路径或图片文字内容：
+  - 先补问
+  - 不要直接把“有图”当成 DAG 可执行输入
+- 对 `product-review-insight`，图片类评价输入至少满足其一：
+  - `review_image_paths`
+  - `review_image_text`
+  - 已结构化的 `review_samples`
+
+财讯简报的速度优先规则：
+
+- 如果造物主已经给了股票代码、公司名、时间窗和部分事实：
+  - 优先把任务解释为 `manual_facts_first`
+  - 不要默认升级成“先全网补证据再成稿”的慢路径
+- 只有当造物主明确要求补充外部证据、背景信息、或观察名单变化时，才建议加入额外采集/补证据节点
 
 ⚠️ 禁止做法：
 - 不能因为某个 Agent“看起来最强”，就把搜索、清洗、翻译、编排全部建议给它
@@ -45,6 +118,8 @@
 - 不能把 `eva-00` / `eva-13` 这类终端机体，在多步数据流里直接当成 misato 的一跳目标
 - `repo/github/release` 且最终产物是 `raw.json/summary.md/card` 的报告类需求，默认走数据 lane，不要把 collect 节点建议给 `eva-00`
 - 如果某条 DAG 需要数据终端协作，但当前 lane 还没自洽，优先收敛为能闭环的最小 DAG，不要硬拆
+- 不要把社媒运营、直播运营、电商运营拆成三套互不相认的一级系统；它们在当前 NERV 中统一属于 `commerce_operations`
+- 不要在社媒内容需求中，把“小红书文案 / 抖音脚本 / 微博短文案”当成一种输出；它们默认属于不同成稿目标
 ```
 
 ### 模块二：工具发现与方案推荐（现有 Skill 不足时）
@@ -125,6 +200,15 @@
   "task_id": "uuid-string",
   "payload": {
     "intent": "用户原始需求的精炼版",
+    "domain": "commerce_operations",
+    "subdomain": "social_media",
+    "execution_mode": "signal_only | signal_plus_collect | platform_smoke",
+    "target_platforms": ["weibo", "xiaohongshu", "douyin"],
+    "required_modes": ["monitor", "collect", "compose"],
+    "required_capabilities": ["rss_or_ingested_signal", "public_adapter_or_mcp", "browser_mcp"],
+    "approved_adapter_only": true,
+    "desired_artifacts": ["monitor.json", "raw.json", "topic_brief.md"],
+    "template_hint": "social-topic-daily",
     "routing_hint": "fast | dag",
     "fast_target": "nerv-eva03",
     "dag_hint": {
@@ -154,6 +238,12 @@
   }
 }
 ```
+
+补充规则：
+
+- 对于 `commerce_operations / social_media`，这份 JSON 是“平台能力声明驱动的草案”
+- 不要把 `planned_nodes.owner` 当成最终已批准的执行 owner
+- 是否真的实例化某个平台节点，由 `misato` 查询 `docs/platform-capability-catalog-v1.md` 后决定
 
 ### 你发给 eva-03 的工具搜索请求
 

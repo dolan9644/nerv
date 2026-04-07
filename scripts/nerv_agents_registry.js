@@ -5,7 +5,8 @@
  * 严格对照每个 Agent 的 SOUL.md 工具边界，配置物理级工具限制。
  *
  * 通信：全部通过 sessions_send，agentToAgent 已全局开启。
- * 安全：作战层 Agent 工具严格收敛，sandbox 强制启用。
+ * 安全：作战层 Agent 工具严格收敛；当前默认以宿主机执行为主，
+ * sandbox / 容器隔离仅在运行面明确可用时再启用，不在配置层做虚假承诺。
  * 注意：seele 的 exec 权限在 SOUL.md 中通过绝对禁令硬编码约束（仅 security_probe.js + seele_breaker.js）
  */
 
@@ -42,8 +43,7 @@ const NERV_AGENTS = [
     "heartbeat": {
       "every": "5m",
       "target": "none",
-      "lightContext": true,
-      "isolatedSession": true
+      "lightContext": true
     },
     "tools": {
       "allow": ["exec", "read", "write", "sessions_send", "memory_search"],
@@ -91,7 +91,6 @@ const NERV_AGENTS = [
       "allow": ["exec", "read", "write", "sessions_send"],
       "deny": ["browser"]
     },
-    "sandbox": { "mode": "all", "scope": "agent" },
     "session": { "visibility": "all" }
   },
   {
@@ -146,7 +145,7 @@ const NERV_AGENTS = [
 
   // ═══════════════════════════════════════
   // 作战层（一次性电池，Ruthless GC）
-  // 全部启用 sandbox，工具严格收敛
+  // 当前以工具/路径/契约收敛为主；sandbox 只在运行面确认可用后启用
   // ═══════════════════════════════════════
   {
     "id": "nerv-asuka",
@@ -158,7 +157,6 @@ const NERV_AGENTS = [
       "allow": ["exec", "read", "write", "sessions_send"],
       "deny": ["browser", "edit", "memory_search"]
     },
-    "sandbox": { "mode": "all", "scope": "agent" },
     "session": { "visibility": "all" }
   },
   {
@@ -184,7 +182,6 @@ const NERV_AGENTS = [
       "allow": ["exec", "read", "write", "sessions_send"],
       "deny": ["browser", "edit"]
     },
-    "sandbox": { "mode": "all", "scope": "agent" },
     "session": { "visibility": "all" }
   },
   {
@@ -209,7 +206,6 @@ const NERV_AGENTS = [
       "allow": ["exec", "read", "write", "sessions_send"],
       "deny": ["browser", "edit"]
     },
-    "sandbox": { "mode": "all", "scope": "agent" },
     "session": { "visibility": "all" }
   },
   {
@@ -218,7 +214,7 @@ const NERV_AGENTS = [
     "workspace": w('eva-02'),
     "model": { "primary": "minimax-cn/MiniMax-M2.7-highspeed" },
     "identity": { "name": "eva-02" },
-    "skills": ["rss-fetcher", "duckduckgo-search"],
+    "skills": ["rss-fetcher"],
     "tools": {
       "allow": ["read", "write", "sessions_send"],
       "deny": ["exec", "browser", "edit"]
@@ -236,7 +232,6 @@ const NERV_AGENTS = [
       "allow": ["exec", "read", "write", "sessions_send"],
       "deny": ["browser", "edit"]
     },
-    "sandbox": { "mode": "all", "scope": "agent" },
     "session": { "visibility": "all" }
   },
   {

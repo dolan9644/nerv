@@ -70,6 +70,8 @@
 
 - `mode`
   - `agent_session`: 通过 `sessions_send` 派发给 Agent
+    - 对异步 DAG，默认使用 `agent:<agentId>:task:<task_id>`
+    - 对单轮问答，才继续使用 `agent:<agentId>:main`
   - `tool_exec`: 由脚本直接执行
   - `approval_gate`: 等待审批后放行
   - `human_input`: 需要用户外部输入

@@ -1,0 +1,97 @@
+{
+  "template_id": "viral-breakdown",
+  "version": "1.0",
+  "domain": "commerce_operations",
+  "subdomain": "social_media",
+  "summary": "爆文拆解流：采集目标内容，补证据，提炼结构并沉淀可复用模板。",
+  "routing_hint": "dag",
+  "inputs": {
+    "required": ["content_targets"],
+    "optional": ["platform", "style_goal", "max_examples"]
+  },
+  "platform_requirements": {
+    "catalog": "docs/platform-capability-catalog-v1.md",
+    "approved_adapter_only": true,
+    "target_platforms_required": false,
+    "rules": {
+      "collect": {
+        "allowed_statuses": ["ready", "partial"],
+        "allowed_source_types": ["public_page", "adapter", "mcp", "rss_feed", "api_service", "self_hosted_service", "browser_mcp"]
+      },
+      "search": {
+        "allowed_statuses": ["ready", "partial"],
+        "allowed_source_types": ["search_api", "adapter", "mcp", "browser_mcp"]
+      }
+    }
+  },
+  "optional_nodes": {
+    "supplement-context": "仅当需要额外背景或对照案例，且平台具备公开搜索/补证据能力时实例化。"
+  },
+  "capability_gate": {
+    "all_gap_behavior": "do_not_create_execution_dag",
+    "partial_behavior": "collect_only_or_collect_plus_search",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "capability_gap_needs_adapter"
+  },
+  "delivery": {
+    "final_owner": "nerv-rei",
+    "notifier": null,
+    "memory_writeback": true
+  },
+  "planned_nodes": [
+    {
+      "node_id": "collect-reference",
+      "family": "collect",
+      "canonical_owner": "nerv-mari",
+      "description": "抓取目标内容、账号或参考素材的公开信息。",
+      "output_artifact": "raw.json",
+      "platform_gate": {
+        "mode": "collect",
+        "allowed_source_types": ["public_page", "adapter", "mcp", "rss_feed", "api_service", "self_hosted_service", "browser_mcp"]
+      }
+    },
+    {
+      "node_id": "supplement-context",
+      "family": "search",
+      "canonical_owner": "nerv-eva03",
+      "description": "补充背景、同类案例或外部证据。",
+      "input_artifact": "raw.json",
+      "output_artifact": "evidence.json",
+      "optional": true,
+      "platform_gate": {
+        "mode": "search",
+        "allowed_source_types": ["search_api", "adapter", "mcp", "browser_mcp"]
+      }
+    },
+    {
+      "node_id": "extract-structure",
+      "family": "normalize",
+      "canonical_owner": "nerv-eva00",
+      "description": "从原始内容中提炼结构、开头、节奏、主题标签。",
+      "input_artifacts": ["raw.json", "evidence.json"],
+      "output_artifact": "patterns.json"
+    },
+    {
+      "node_id": "compose-breakdown",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "输出可复用的拆解报告和结构模板。",
+      "input_artifact": "patterns.json",
+      "output_artifact": "breakdown.md"
+    },
+    {
+      "node_id": "memory-patterns",
+      "family": "memory",
+      "canonical_owner": "nerv-rei",
+      "description": "将拆解结果沉淀成可复用的记忆资产。",
+      "input_artifact": "breakdown.md",
+      "output_artifact": "memory_note.json"
+    }
+  ],
+  "edges": [
+    { "from": "collect-reference", "to": "extract-structure" },
+    { "from": "supplement-context", "to": "extract-structure" },
+    { "from": "extract-structure", "to": "compose-breakdown" },
+    { "from": "compose-breakdown", "to": "memory-patterns" }
+  ]
+}

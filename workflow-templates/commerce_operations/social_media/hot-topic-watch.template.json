@@ -1,0 +1,89 @@
+{
+  "template_id": "hot-topic-watch",
+  "version": "1.0",
+  "domain": "commerce_operations",
+  "subdomain": "social_media",
+  "summary": "热点追踪流：监控指定主题或账号，必要时补证据，再生成提醒摘要。",
+  "routing_hint": "dag",
+  "inputs": {
+    "required": ["watch_targets", "time_window"],
+    "optional": ["keywords", "priority_threshold", "tone"]
+  },
+  "platform_requirements": {
+    "catalog": "docs/platform-capability-catalog-v1.md",
+    "approved_adapter_only": true,
+    "target_platforms_required": true,
+    "rules": {
+      "monitor": {
+        "allowed_statuses": ["ready", "partial"],
+        "allowed_source_types": ["rss", "rss_feed", "ingested_signal", "browser_mcp"]
+      },
+      "search": {
+        "allowed_statuses": ["ready", "partial"],
+        "allowed_source_types": ["search_api", "adapter", "mcp", "browser_mcp"]
+      }
+    }
+  },
+  "optional_nodes": {
+      "supplement-evidence": "仅当监控结果不足，且平台具备公开搜索/补证据能力时实例化。"
+  },
+  "capability_gate": {
+    "all_gap_behavior": "do_not_create_execution_dag",
+    "partial_behavior": "monitor_only_or_monitor_plus_search",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "capability_gap_needs_adapter"
+  },
+  "delivery": {
+    "final_owner": "nerv-misato",
+    "notifier": "adam_notifier",
+    "memory_writeback": true
+  },
+  "planned_nodes": [
+    {
+      "node_id": "watch-topic",
+      "family": "monitor",
+      "canonical_owner": "nerv-eva02",
+      "description": "持续监控指定主题、账号或观察名单的变化。",
+      "output_artifact": "watch.json",
+      "platform_gate": {
+        "mode": "monitor",
+        "allowed_source_types": ["rss", "rss_feed", "ingested_signal", "browser_mcp"]
+      }
+    },
+    {
+      "node_id": "supplement-evidence",
+      "family": "search",
+      "canonical_owner": "nerv-eva03",
+      "description": "在监控结果不足以解释变化时补充外部证据。",
+      "input_artifact": "watch.json",
+      "output_artifact": "evidence.json",
+      "optional": true,
+      "fallback_reason": "evidence_optional_path",
+      "platform_gate": {
+        "mode": "search",
+        "allowed_source_types": ["search_api", "adapter", "mcp", "browser_mcp"]
+      }
+    },
+    {
+      "node_id": "compose-alert",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "生成风险/机会摘要和提醒说明。",
+      "input_artifacts": ["watch.json", "evidence.json"],
+      "output_artifact": "alert.md"
+    },
+    {
+      "node_id": "notify-alert",
+      "family": "notify",
+      "canonical_owner": "nerv-misato",
+      "description": "将热点提醒发送给造物主。",
+      "input_artifact": "alert.md",
+      "output_artifact": "sent.json"
+    }
+  ],
+  "edges": [
+    { "from": "watch-topic", "to": "compose-alert" },
+    { "from": "supplement-evidence", "to": "compose-alert" },
+    { "from": "compose-alert", "to": "notify-alert" }
+  ]
+}

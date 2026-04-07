@@ -1,0 +1,133 @@
+{
+  "template_id": "social-topic-daily",
+  "version": "1.0",
+  "domain": "commerce_operations",
+  "subdomain": "social_media",
+  "summary": "社媒选题日报流：采集热点与竞品变化，排序后生成可直接交付的选题日报。",
+  "routing_hint": "dag",
+  "execution_modes": ["signal_only", "signal_plus_collect"],
+  "default_execution_mode": "signal_only",
+  "inputs": {
+    "required": ["keywords", "platforms", "time_window"],
+    "optional": ["accounts", "max_records", "tone", "title_prefix", "execution_mode", "signal_source"]
+  },
+  "platform_requirements": {
+    "catalog": "docs/platform-capability-catalog-v1.md",
+    "approved_adapter_only": true,
+    "target_platforms_required": true,
+    "rules": {
+      "monitor": {
+        "allowed_statuses": ["ready", "partial"],
+        "allowed_source_types": ["rss", "rss_feed", "ingested_signal", "browser_mcp"],
+        "notes": "默认用于 RSS / 已接入信号；当 `signal_source` 为已接入信号时，按监控输入处理，不走平台采集 gate。"
+      },
+      "search": {
+        "allowed_statuses": ["ready", "partial"],
+        "allowed_source_types": ["search_api", "adapter", "mcp", "browser_mcp"],
+        "notes": "只在监控结果不足或需要补证据时实例化。"
+      },
+      "collect": {
+        "allowed_statuses": ["ready", "partial"],
+        "allowed_source_types": ["public_page", "adapter", "mcp", "rss_feed", "api_service", "self_hosted_service", "browser_mcp"],
+        "notes": "仅当平台能力目录允许公开采集、self-hosted 公开服务或 browser_mcp 时才实例化。"
+      }
+    }
+  },
+  "optional_nodes": {
+    "supplement-search": "仅当平台具备公开搜索/补证据能力，且监控结果不足时实例化。",
+    "collect-posts": "仅当至少一个目标平台在 collect 维度上为 ready/partial 时实例化。"
+  },
+  "capability_gate": {
+    "all_gap_behavior": "do_not_create_execution_dag",
+    "partial_behavior": "instantiate_only_ready_partial_nodes_and_record_fallback_reason",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "capability_gap_needs_adapter",
+    "degrade_to_signal_only_when_collect_blocked": true
+  },
+  "delivery": {
+    "final_owner": "nerv-misato",
+    "notifier": "adam_notifier",
+    "memory_writeback": true
+  },
+  "signal_sources": [
+    {
+      "name": "ingested-signal",
+      "source_type": "ingested_signal",
+      "description": "RSS / 已接入信号输出，作为 signal_only 默认输入。",
+      "required_for": ["signal_only"]
+    }
+  ],
+  "planned_nodes": [
+    {
+      "node_id": "monitor-social",
+      "family": "monitor",
+      "canonical_owner": "nerv-eva02",
+      "description": "读取 RSS / 已接入信号或同类结构化输入，生成结构化监控结果。",
+      "output_artifact": "monitor.json",
+      "platform_gate": {
+        "mode": "monitor",
+        "allowed_source_types": ["rss", "rss_feed", "ingested_signal", "browser_mcp"],
+        "preferred_source_types": ["ingested_signal"]
+      }
+    },
+    {
+      "node_id": "supplement-search",
+      "family": "search",
+      "canonical_owner": "nerv-eva03",
+      "description": "当监控结果不足时，补充公开搜索或外部证据。",
+      "input_artifact": "monitor.json",
+      "output_artifact": "evidence.json",
+      "optional": true,
+      "fallback_reason": "evidence_optional_path",
+      "platform_gate": {
+        "mode": "search",
+        "allowed_source_types": ["search_api", "adapter", "mcp", "browser_mcp"]
+      }
+    },
+    {
+      "node_id": "collect-posts",
+      "family": "collect",
+      "canonical_owner": "nerv-mari",
+      "description": "按平台公开目标抓取帖子、账号页或评论页。",
+      "output_artifact": "raw.json",
+      "optional": true,
+      "fallback_reason": "collect_skipped_monitor_only",
+      "platform_gate": {
+        "mode": "collect",
+        "allowed_source_types": ["public_page", "adapter", "mcp", "rss_feed", "api_service", "self_hosted_service", "browser_mcp"],
+        "runtime_requirements": ["collect_capability_available", "no_captcha_or_risk_page_if_browser_based"]
+      }
+    },
+    {
+      "node_id": "rank-topics",
+      "family": "normalize",
+      "canonical_owner": "nerv-eva00",
+      "description": "对监控与采集结果做去重、聚类、评分和排序。",
+      "input_artifacts": ["monitor.json", "raw.json", "evidence.json"],
+      "output_artifact": "ranked.json"
+    },
+    {
+      "node_id": "compose-brief",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "将排序结果生成选题日报、内容提纲或简报。",
+      "input_artifact": "ranked.json",
+      "output_artifact": "topic_brief.md"
+    },
+    {
+      "node_id": "notify-brief",
+      "family": "notify",
+      "canonical_owner": "nerv-misato",
+      "description": "向造物主发送最终选题日报，必要时通过 Adam Notifier 投递。",
+      "input_artifact": "topic_brief.md",
+      "output_artifact": "sent.json"
+    }
+  ],
+  "edges": [
+    { "from": "monitor-social", "to": "rank-topics" },
+    { "from": "supplement-search", "to": "rank-topics" },
+    { "from": "collect-posts", "to": "rank-topics" },
+    { "from": "rank-topics", "to": "compose-brief" },
+    { "from": "compose-brief", "to": "notify-brief" }
+  ]
+}

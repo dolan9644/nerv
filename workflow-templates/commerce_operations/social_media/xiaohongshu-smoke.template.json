@@ -1,0 +1,79 @@
+{
+  "template_id": "xiaohongshu-smoke",
+  "version": "1.0",
+  "domain": "commerce_operations",
+  "subdomain": "social_media",
+  "summary": "小红书最小可跑通 DAG：用 browser_mcp / Chromium MCP / xiaohongshu-mcp 拉取少量笔记，排序后生成简报并通知。",
+  "routing_hint": "dag",
+  "inputs": {
+    "required": ["keywords", "time_window"],
+    "optional": ["accounts", "max_records", "tone", "title_prefix"]
+  },
+  "platform_requirements": {
+    "catalog": "docs/platform-capability-catalog-v1.md",
+    "approved_adapter_only": true,
+    "target_platforms_required": true,
+    "rules": {
+      "collect": {
+        "allowed_statuses": ["ready", "partial"],
+        "allowed_source_types": ["public_page", "adapter", "mcp", "browser_mcp"],
+        "notes": "小红书最小可跑通路径默认要求 browser_mcp / Chromium MCP / xiaohongshu-mcp；若运行面不可达、无有效登录态、命中验证码或风险页，直接 TOOL_GAP 或 NODE_FAILED。"
+      }
+    }
+  },
+  "optional_nodes": {},
+  "capability_gate": {
+    "all_gap_behavior": "do_not_create_execution_dag",
+    "partial_behavior": "instantiate_only_ready_partial_nodes_and_record_fallback_reason",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "xiaohongshu_requires_browser_mcp_login_and_non_blocked_page"
+  },
+  "delivery": {
+    "final_owner": "nerv-misato",
+    "notifier": "adam_notifier",
+    "memory_writeback": false
+  },
+  "planned_nodes": [
+    {
+      "node_id": "collect-xhs",
+      "family": "collect",
+      "canonical_owner": "nerv-mari",
+      "description": "使用 browser_mcp / Chromium MCP / xiaohongshu-mcp 拉取指定关键词的少量笔记与评论摘要。",
+      "output_artifact": "raw.json",
+      "platform_gate": {
+        "mode": "collect",
+        "allowed_source_types": ["public_page", "adapter", "mcp", "browser_mcp"],
+        "runtime_requirements": ["browser_or_mcp_reachable", "logged_in_if_required", "no_captcha_or_risk_page"]
+      }
+    },
+    {
+      "node_id": "rank-xhs",
+      "family": "normalize",
+      "canonical_owner": "nerv-eva00",
+      "description": "对小红书原始结果做去重、聚类、评分和排序。",
+      "input_artifact": "raw.json",
+      "output_artifact": "ranked.json"
+    },
+    {
+      "node_id": "compose-xhs-brief",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "把排序结果生成可直接给造物主看的小红书简报。",
+      "input_artifact": "ranked.json",
+      "output_artifact": "xhs_brief.md"
+    },
+    {
+      "node_id": "notify-xhs-brief",
+      "family": "notify",
+      "canonical_owner": "nerv-misato",
+      "description": "读取小红书简报并通过 Adam Notifier 推送。",
+      "input_artifact": "xhs_brief.md",
+      "output_artifact": "sent.json"
+    }
+  ],
+  "edges": [
+    { "from": "collect-xhs", "to": "rank-xhs" },
+    { "from": "rank-xhs", "to": "compose-xhs-brief" },
+    { "from": "compose-xhs-brief", "to": "notify-xhs-brief" }
+  ]
+}
