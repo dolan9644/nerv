@@ -141,39 +141,39 @@ NERV 消灭了这个问题。你只负责下达战略指令，15 个专职机体
 
 | 机体 | 代号 | 职责 | 权限 |
 |:-----|:-----|:-----|:-----|
-| 🎯 碇源堂 | `nerv-gendo` | 首席戰略顧問 · 用户沟通 · 方案推荐 · 工具发现决策 · 发布授权 | read, memory_search, sessions_send, exec (仅限 nerv-publisher) |
-| 🗡️ 葛城美里 | `nerv-misato` | 作戦指揮官 · DAG 路由 · 任务分派 · 状态巡检 | read, write, exec (工具脚本), sessions_send |
-| 🔒 SEELE | `nerv-seele` | 安全審計会 · 风控熔断 · 敏感拦截 · 全链路审计 | read, write, exec (仅 security_probe.js + seele_breaker.js) |
+| 🎯 碇源堂 | `nerv-gendo` | 首席战略顾问 · 需求翻译 · DAG 草案 · workflow 选型 · 工具发现决策 · 发布授权 | read, memory_search, sessions_send, exec (仅限 nerv-publisher) |
+| 🗡️ 葛城美里 | `nerv-misato` | 作战指挥官 · DAG 路由 · task_id / task-scoped dispatch · 任务分派 · 状态巡检 · 终态收口 | read, write, exec (工具脚本), sessions_send |
+| 🔒 SEELE | `nerv-seele` | 安全审计会 · 风控熔断 · 敏感拦截 · 孤岛/漏调度/环路标记 · 全链路审计 | read, write, exec (仅 security_probe.js + seele_breaker.js) |
 
 ### 编排层
 
 | 机体 | 代号 | 职责 | 权限 |
 |:-----|:-----|:-----|:-----|
-| 🔬 赤木律子 | `nerv-ritsuko` | 代码 Pipeline 编排 · 质量验收 | read, write, exec |
-| ⚡ 碇真嗣 | `nerv-shinji` | 数据 Pipeline 编排 · Schema 锚点 | read, write, exec, memory_search |
-| 🌙 绫波零 | `nerv-rei` | 记忆守护 · 向量检索 · Skill GC · 损坏文件隔离 | read, write, memory_search |
+| 🔬 赤木律子 | `nerv-ritsuko` | 代码/适配器 Pipeline 编排 · 安装验证 · 质量验收 · workflow 资产落地 | read, write, exec |
+| ⚡ 碇真嗣 | `nerv-shinji` | 数据 Pipeline 编排 · Schema 锚点 · meeting-to-task / 结构化任务卡 | read, write, exec, memory_search |
+| 🌙 绫波零 | `nerv-rei` | 记忆守护 · workflow pattern 沉淀 · 向量检索 · Skill GC · 损坏文件隔离 | read, write, memory_search |
 
 ### 作战层（一次性电池）
 
 | 机体 | 代号 | 职责 | 特殊能力 |
 |:-----|:-----|:-----|:---------|
-| 🔥 式波明日香 | `nerv-asuka` | 代码调试 · Bug 定位 | exec |
-| 🎵 渚薰 | `nerv-kaworu` | 代码审查 · 安全审计 | 三层 Skill 矩阵 (codex/gstack/aider) |
-| 🕷️ 真希波 | `nerv-mari` | 爬虫采集 · 平台适配 | exec, 403 退避协议 |
-| 📡 二号机 | `nerv-eva02` | 舆情监控 · 趋势预警 | read, write |
-| 🔍 三号机 | `nerv-eva03` | **深度搜索 + 工具发现** | exec (gh CLI), 双模式 |
-| 🧹 零号机 | `nerv-eva00` | 数据清洗 · 字段白名单 · 完整性评分 | read, write |
-| ✍️ 十三号机 | `nerv-eva13` | 文案生成 · 多语言 | read, write |
-| 🛠️ 初号机 | `nerv-eva01` | 部署运维 · Docker / 宿主机工具链 | exec, 幂等部署 |
-| 🎨 量产机 | `nerv-eva-series` | 视觉生成 · 配图 | read, write, image-gen |
+| 🔥 式波明日香 | `nerv-asuka` | 代码调试 · Bug 定位 · dry-run 验证 | exec |
+| 🎵 渚薰 | `nerv-kaworu` | 代码审查 · 安全审计 · 兼容性复核 | read, write, memory_search |
+| 🕷️ 真希波 | `nerv-mari` | 网页抓取 · 图片/文本抽取 · 平台适配 | exec, 403 退避协议 |
+| 📡 二号机 | `nerv-eva02` | 社媒信号监控 · 趋势预警 · social-topic-daily 主链 | read, write, memory_search |
+| 🔍 三号机 | `nerv-eva03` | 深度搜索 · 工具发现 · 资料核验 | read, exec (gh CLI) |
+| 🧹 零号机 | `nerv-eva00` | 数据清洗 · 输入归一化 · 字段白名单 · 完整性评分 · product-review-insight / live-session-script 前置整理 | read, write |
+| ✍️ 十三号机 | `nerv-eva13` | 文案生成 · 脚本/口播成稿 · 多语言 · live-replay-summary / social-copy-studio / finance-brief 终稿 | read, write |
+| 🛠️ 初号机 | `nerv-eva01` | 部署运维 · 安装校验 · Docker / 宿主机工具链 | exec, 幂等部署 |
+| 🎨 量产机 | `nerv-eva-series` | 视觉生成 · 配图 · 图像素材变体 | read, write, image-gen |
 
 ### 神明节点（功能函数，非 Agent）
 
 | 节点 | 实现 | 触发条件 |
 |:-----|:-----|:---------|
-| 亚当 (Adam) | `adam_notifier.py` 飞书 Webhook | ① 审批推送：SEELE 标记风险 → 推送待审批卡片 ② **任务交付**：DAG 完成 → 推送结果通知。造物主的唯一信使 |
+| 亚当 (Adam) | `adam_notifier.py` 飞书 Webhook | ① 审批推送：SEELE 标记风险 → 推送待审批卡片 ② **任务交付**：DAG 完成/失败 → 推送结果通知。造物主的唯一信使 |
 | 莉莉丝 (Lilith) | Cron 脚本 | 每日 03:00 备份 nerv.db |
-| 朗基努斯之枪 (Spear) | `spear_sync.js` 状态对齐 | 每 5 分钟扫描孤岛/漏调度/环路/异常节点，负责发现和标记异常 |
+| 朗基努斯之枪 (Spear) | `spear_sync.js` 状态对齐 | 每 5 分钟扫描孤岛/漏调度/环路/异常节点，只负责发现和标记，不自动修复 |
 
 ### 已验证 workflow 能力
 
