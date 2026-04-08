@@ -40,6 +40,7 @@ const WORKSPACE_TO_AGENT_ID = new Map(
   NERV_AGENTS.map(agent => [basename(agent.workspace), agent.id])
 );
 const IGNORED_QUEUE_PREFIXES = ['purify_report_'];
+const PROCESSING_STALE_MS = parseInt(process.env.NERV_MEMORY_PROCESSING_STALE_MS || '1800000', 10);
 
 // 命令行参数
 const args = process.argv.slice(2);
@@ -108,6 +109,45 @@ function scanQueue() {
       try { return statSync(fullPath).isFile(); } catch { return false; }
     })
     .sort();
+}
+
+function recoverStaleProcessingFiles() {
+  if (!existsSync(PROCESSING_DIR)) return { rescued: 0, skipped: 0 };
+
+  const now = Date.now();
+  let rescued = 0;
+  let skipped = 0;
+
+  for (const filename of readdirSync(PROCESSING_DIR).sort()) {
+    const ext = extname(filename).toLowerCase();
+    if (!VALID_EXTENSIONS.has(ext)) continue;
+
+    const procPath = join(PROCESSING_DIR, filename);
+    let stat;
+    try {
+      stat = statSync(procPath);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+
+    const ageMs = now - stat.mtimeMs;
+    if (ageMs < PROCESSING_STALE_MS) {
+      skipped++;
+      continue;
+    }
+
+    const queuePath = join(QUEUE_DIR, filename);
+    if (existsSync(queuePath)) {
+      const backupName = `${filename}.recovered.${now}`;
+      if (safeMove(procPath, join(QUEUE_DIR, backupName))) rescued++;
+      continue;
+    }
+
+    if (safeMove(procPath, queuePath)) rescued++;
+  }
+
+  return { rescued, skipped };
 }
 
 function normalizeAgentReference(value) {
@@ -441,6 +481,13 @@ function appendToMemory(agentRef, content, sourceFile) {
 
 async function main() {
   console.log(`[REI] 记忆提纯引擎启动 | batch=${BATCH_SIZE} | dry_run=${DRY_RUN}`);
+
+  if (!DRY_RUN) {
+    const recovered = recoverStaleProcessingFiles();
+    if (recovered.rescued > 0) {
+      console.log(`[REI] 已回收 processing 滞留文件: ${recovered.rescued} 个`);
+    }
+  }
 
   const allFiles = scanQueue();
   console.log(`[REI] 队列中共 ${allFiles.length} 个文件`);

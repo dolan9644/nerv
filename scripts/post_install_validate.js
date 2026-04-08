@@ -13,22 +13,31 @@ const REQUIRED_ASSETS = {
   workflow_templates: [
     'workflow-templates/commerce_operations/live_commerce/live-session-script.template.json',
     'workflow-templates/commerce_operations/live_commerce/live-replay-summary.template.json',
+    'workflow-templates/commerce_operations/live_commerce/live-objection-bank.template.json',
     'workflow-templates/commerce_operations/ecommerce_ops/product-review-insight.template.json',
+    'workflow-templates/commerce_operations/ecommerce_ops/competitor-watch.template.json',
     'workflow-templates/project_ops/meeting-to-task.template.json',
+    'workflow-templates/project_ops/status-report.template.json',
     'workflow-templates/finance_info/finance-brief.template.json'
   ],
   misato_workflow_skills: [
     'agents/misato/SKILLS/live-session-script/SKILL.md',
     'agents/misato/SKILLS/live-replay-summary/SKILL.md',
+    'agents/misato/SKILLS/live-objection-bank/SKILL.md',
     'agents/misato/SKILLS/product-review-insight/SKILL.md',
+    'agents/misato/SKILLS/competitor-watch/SKILL.md',
     'agents/misato/SKILLS/meeting-to-task/SKILL.md',
+    'agents/misato/SKILLS/status-report/SKILL.md',
     'agents/misato/SKILLS/finance-brief/SKILL.md'
   ],
   workflow_specs: [
     'docs/live-script-pack-spec-v1.md',
     'docs/replay-summary-pack-spec-v1.md',
+    'docs/objection-handling-pack-spec-v1.md',
     'docs/product-review-insight-spec-v1.md',
+    'docs/competitor-watch-pack-spec-v1.md',
     'docs/meeting-to-task-pack-spec-v1.md',
+    'docs/status-report-pack-spec-v1.md',
     'docs/finance-brief-spec-v1.md'
   ]
 };

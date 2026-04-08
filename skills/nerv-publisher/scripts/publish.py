@@ -15,10 +15,12 @@ import json
 import os
 import sys
 import sqlite3
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
 NERV_DB = os.path.expanduser("~/.openclaw/nerv/data/nerv.db")
+NERV_ROOT = os.path.expanduser("~/.openclaw/nerv")
 
 
 def load_config(config_path: str) -> dict:
@@ -107,6 +109,23 @@ def log_event(source: str, event: str, details: str, task_id: str = None):
         pass
 
 
+def run_pre_publish_security_gate() -> None:
+    gate_script = os.path.join(NERV_ROOT, "scripts", "pre_publish_security_gate.js")
+    result = subprocess.run(
+        ["node", gate_script],
+        cwd=NERV_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        if result.stdout.strip():
+            print(result.stdout.strip())
+        if result.stderr.strip():
+            print(result.stderr.strip(), file=sys.stderr)
+        log_event("gendo", "PUBLISH_BLOCKED", "Pre-publish security gate failed", None)
+        sys.exit(result.returncode or 1)
+
+
 # ═══════════════════════════════════════════════════════════════
 # 平台发布器
 # ═══════════════════════════════════════════════════════════════
@@ -190,6 +209,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="模拟运行")
     args = parser.parse_args()
 
+    run_pre_publish_security_gate()
     config = load_config(args.config)
     outputs = get_task_outputs(args.task_id)
 

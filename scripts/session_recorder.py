@@ -38,6 +38,7 @@ from nerv_paths import OPENCLAW_ROOT, NERV_ROOT, MEMORY_QUEUE_DIR, get_nerv_db_p
 NERV_ROOT = str(NERV_ROOT)
 OPENCLAW_ROOT = str(OPENCLAW_ROOT)  # ~/.openclaw
 DB_PATH = get_nerv_db_path()
+WORKFLOW_REGISTRY_PATH = os.path.join(NERV_ROOT, 'docs', 'workflow-navigation-registry-v1.json')
 
 # State file（记录每个 .jsonl 的已处理 offset）
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.recorder_state.json')
@@ -49,6 +50,7 @@ MEMORY_QUEUE_DIR = str(MEMORY_QUEUE_DIR)
 # 只扫描 NERV Agent 的 session
 NERV_AGENT_PREFIX = 'nerv-'
 OPENCLAW_BIN = os.environ.get('OPENCLAW_BIN') or shutil.which('openclaw') or '/opt/homebrew/bin/openclaw'
+_WORKFLOW_REGISTRY_CACHE = None
 
 # ═══════════════════════════════════════════════════════════════
 # State 管理
@@ -91,8 +93,8 @@ def release_lock(fd):
 # JSONL 解析
 # ═══════════════════════════════════════════════════════════════
 
-NERV_EVENTS = {'NODE_COMPLETED', 'NODE_FAILED', 'DAG_COMPLETE', 'DISPATCH', 'STRATEGIC_DISPATCH', 'TOOL_GAP'}
-FAILURE_EVENTS = {'NODE_FAILED', 'NODE_OBSERVED_FAILED'}
+NERV_EVENTS = {'NODE_COMPLETED', 'NODE_FAILED', 'CIRCUIT_BROKEN', 'DAG_COMPLETE', 'DISPATCH', 'STRATEGIC_DISPATCH', 'TOOL_GAP'}
+FAILURE_EVENTS = {'NODE_FAILED', 'NODE_OBSERVED_FAILED', 'CIRCUIT_BROKEN'}
 SUCCESS_EVENTS = {'NODE_COMPLETED', 'NODE_OBSERVED_DONE'}
 TERMINAL_NODE_STATUSES = {'DONE', 'FAILED', 'CIRCUIT_BROKEN', 'BLOCKED'}
 
@@ -138,6 +140,27 @@ def extract_nerv_event(text, allowed_events=None):
         allowed_events = NERV_EVENTS
     if data.get('event') in allowed_events:
         return data
+    return None
+
+RUNTIME_ALERT_PATTERNS = [
+    ('TOOL_PERMISSION_DENIED', ['没有权限', '权限不足', 'permission denied', 'requires approval', 'approval required']),
+    ('TOOL_UNAVAILABLE', ['tool not available', 'tool unavailable', '缺乏工具支持', 'runtime lacks', 'unsupported tool', 'missing tool'])
+]
+
+def extract_runtime_alert(text):
+    if not isinstance(text, str):
+        return None
+    normalized = text.strip()
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    for alert_type, patterns in RUNTIME_ALERT_PATTERNS:
+        for pattern in patterns:
+            if pattern.lower() in lowered:
+                return {
+                    'alert_type': alert_type,
+                    'summary': normalized[:300]
+                }
     return None
 
 def extract_dispatch(content_list):
@@ -251,6 +274,20 @@ def scan_session_file(filepath, offset=0):
                 
                 # Assistant 消息 = 可能包含 sessions_send 调度
                 elif role == 'assistant':
+                    text = ''
+                    if isinstance(content, str):
+                        text = content
+                    elif isinstance(content, list):
+                        text = ' '.join(c.get('text', '') for c in content if isinstance(c, dict) and c.get('type') == 'text')
+
+                    runtime_alert = extract_runtime_alert(text)
+                    if runtime_alert:
+                        events.append({
+                            'type': 'runtime_alert',
+                            'alert': runtime_alert,
+                            'file': os.path.basename(filepath)
+                        })
+
                     if isinstance(content, list):
                         dispatches = extract_dispatch(content)
                         for d in dispatches:
@@ -715,8 +752,12 @@ def record_nerv_event(conn, event_data, task_cache=None):
             status = 'DONE'
             result_path = contract_eval.get('result_path')
             set_agent_runtime(conn, source, 'IDLE', None, now)
-        elif event_type == 'NODE_FAILED':
+        elif event_type in ('NODE_FAILED', 'TOOL_GAP'):
             status = 'FAILED'
+            result_path = contract_eval.get('result_path')
+            set_agent_runtime(conn, source, 'ERROR', None, now)
+        elif event_type == 'CIRCUIT_BROKEN':
+            status = 'CIRCUIT_BROKEN'
             result_path = contract_eval.get('result_path')
             set_agent_runtime(conn, source, 'ERROR', None, now)
         else:
@@ -751,7 +792,7 @@ def record_nerv_event(conn, event_data, task_cache=None):
             if session_key:
                 upsert_task_session_binding(conn, task_id, source, session_key, 'worker', node_id, now)
 
-        if event_type == 'NODE_FAILED':
+        if event_type in ('NODE_FAILED', 'TOOL_GAP', 'CIRCUIT_BROKEN'):
             blocked_count = block_downstream_nodes(conn, task_id, node_id, now)
             if blocked_count > 0:
                 conn.execute(
@@ -767,7 +808,7 @@ def record_nerv_event(conn, event_data, task_cache=None):
                 )
     
     # 3. 检查 task 是否全部完成
-    if event_type in ('NODE_COMPLETED', 'NODE_FAILED', 'DAG_COMPLETE'):
+    if event_type in ('NODE_COMPLETED', 'NODE_FAILED', 'CIRCUIT_BROKEN', 'TOOL_GAP', 'DAG_COMPLETE'):
         recompute_task_status(conn, task_id, now)
     
     # 4. 写审计日志
@@ -793,6 +834,30 @@ def record_nerv_event(conn, event_data, task_cache=None):
         'reason': 'recorded',
         'contract': contract_eval
     }
+
+def record_runtime_alert(conn, alert_data):
+    alert = alert_data.get('alert', {})
+    if not alert:
+        return {'ok': False, 'reason': 'empty_alert'}
+
+    now = int(time.time())
+    conn.execute(
+        'INSERT INTO audit_logs (task_id, node_id, agent_id, action, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        (
+            None,
+            None,
+            'session_recorder',
+            'RUNTIME_ALERT',
+            json.dumps({
+                'alert_type': alert.get('alert_type'),
+                'summary': alert.get('summary'),
+                'source_file': alert_data.get('file')
+            }, ensure_ascii=False)[:500],
+            now
+        )
+    )
+    conn.commit()
+    return {'ok': True, 'reason': 'recorded'}
 
 def record_dispatch(conn, dispatch_data, task_cache=None):
     """记录 Misato 的调度行为"""
@@ -1206,6 +1271,256 @@ def get_task_runtime_summary(conn, task_id):
         'terminal': counts['terminal'] if counts else 0
     }
 
+def load_workflow_registry():
+    global _WORKFLOW_REGISTRY_CACHE
+    if _WORKFLOW_REGISTRY_CACHE is not None:
+        return _WORKFLOW_REGISTRY_CACHE
+    if not os.path.exists(WORKFLOW_REGISTRY_PATH):
+        _WORKFLOW_REGISTRY_CACHE = {}
+        return _WORKFLOW_REGISTRY_CACHE
+    try:
+        with open(WORKFLOW_REGISTRY_PATH, encoding='utf-8') as f:
+            payload = json.load(f)
+        workflows = payload.get('workflows', []) if isinstance(payload, dict) else []
+        _WORKFLOW_REGISTRY_CACHE = {
+            item.get('workflow_id'): item
+            for item in workflows
+            if isinstance(item, dict) and item.get('workflow_id')
+        }
+    except Exception:
+        _WORKFLOW_REGISTRY_CACHE = {}
+    return _WORKFLOW_REGISTRY_CACHE
+
+def get_task_quality_gate(conn, task_id):
+    if conn is None or not task_id:
+        return None
+    row = conn.execute(
+        'SELECT workflow_id, workflow_cn_name FROM tasks WHERE task_id = ?',
+        (task_id,)
+    ).fetchone()
+    if not row:
+        return None
+    workflow_id = row['workflow_id'] if 'workflow_id' in row.keys() else None
+    if not workflow_id:
+        return None
+    workflow = load_workflow_registry().get(workflow_id)
+    if not workflow:
+        return None
+    script = workflow.get('quality_gate_script')
+    if not script:
+        return None
+    absolute_script = os.path.join(NERV_ROOT, script)
+    if not os.path.exists(absolute_script):
+        return None
+    return {
+        'workflow_id': workflow_id,
+        'workflow_cn_name': row['workflow_cn_name'] if 'workflow_cn_name' in row.keys() and row['workflow_cn_name'] else workflow.get('cn_name') or workflow_id,
+        'script': absolute_script
+    }
+
+def get_quality_gate_nodes(conn, task_id):
+    if conn is None or not task_id:
+        return []
+    snapshot = load_task_snapshot(conn, task_id, {})
+    dag = snapshot.get('dag') or {}
+    nodes = []
+    for node_def in dag.get('nodes', []) or []:
+        if not isinstance(node_def, dict):
+            continue
+        constraints = (((node_def.get('contract') or {}).get('dispatch_contract') or {}).get('constraints') or {})
+        if not constraints.get('quality_gate'):
+            continue
+        node_id = node_def.get('node_id')
+        if not node_id:
+            continue
+        row = conn.execute(
+            'SELECT status, result_path, error_log, completed_at FROM dag_nodes WHERE task_id = ? AND node_id = ?',
+            (task_id, node_id)
+        ).fetchone()
+        nodes.append({
+            'node_id': node_id,
+            'status': row['status'] if row and 'status' in row.keys() else None,
+            'result_path': row['result_path'] if row and 'result_path' in row.keys() else None,
+            'error_log': row['error_log'] if row and 'error_log' in row.keys() else None,
+            'completed_at': row['completed_at'] if row and 'completed_at' in row.keys() else None,
+            'node_def': node_def
+        })
+    return nodes
+
+def task_terminal_notification_exists(conn, task_id):
+    if conn is None or not task_id:
+        return False
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM audit_logs
+        WHERE task_id = ? AND action = 'TASK_TERMINAL_NOTIFIED'
+        LIMIT 1
+        """,
+        (task_id,)
+    ).fetchone()
+    return bool(row)
+
+def record_task_terminal_notification(conn, task_id, node_id, event_type, msg):
+    if conn is None or not task_id:
+        return
+    conn.execute(
+        'INSERT INTO audit_logs (task_id, node_id, agent_id, action, detail) VALUES (?, ?, ?, ?, ?)',
+        (
+            task_id,
+            node_id or None,
+            'session_recorder',
+            'TASK_TERMINAL_NOTIFIED',
+            json.dumps({
+                'event_type': event_type,
+                'message_excerpt': (msg or '')[:500]
+            }, ensure_ascii=False)[:500]
+        )
+    )
+    conn.commit()
+
+def record_quality_gate_audit(conn, task_id, node_id, quality_result, passed):
+    if conn is None or not task_id:
+        return
+    action = 'QUALITY_GATE_PASSED' if passed else 'QUALITY_GATE_FAILED'
+    conn.execute(
+        'INSERT INTO audit_logs (task_id, node_id, agent_id, action, detail) VALUES (?, ?, ?, ?, ?)',
+        (
+            task_id,
+            node_id or None,
+            'session_recorder',
+            action,
+            json.dumps(quality_result.get('payload') or {}, ensure_ascii=False)[:500]
+        )
+    )
+    conn.commit()
+
+def build_quality_gate_failure_result(task_id, workflow_id, workflow_cn_name, node_id, node_status, reason):
+    issue_message = reason or '质量门节点未通过验收'
+    return {
+        'checked': True,
+        'passed': False,
+        'workflow_id': workflow_id,
+        'workflow_cn_name': workflow_cn_name or workflow_id or 'workflow',
+        'payload': {
+            'issues': [
+                {
+                    'code': 'QUALITY_GATE_NODE_FAILURE',
+                    'message': issue_message,
+                    'node_id': node_id,
+                    'node_status': node_status
+                }
+            ],
+            'task_id': task_id,
+            'node_id': node_id,
+            'node_status': node_status
+        },
+        'detail': issue_message[:300]
+    }
+
+def run_quality_gate(conn, task_id):
+    quality_gate = get_task_quality_gate(conn, task_id)
+    if not quality_gate:
+        return {'checked': False, 'reason': 'no_quality_gate'}
+    try:
+        result = subprocess.run(
+            ['node', quality_gate['script'], '--task', task_id],
+            capture_output=True, text=True, timeout=30, cwd=NERV_ROOT
+        )
+        stdout = (result.stdout or '').strip()
+        payload = json.loads(stdout) if stdout else {}
+        if result.returncode == 0 and payload.get('passed') is True:
+            return {
+                'checked': True,
+                'passed': True,
+                'workflow_id': quality_gate['workflow_id'],
+                'workflow_cn_name': quality_gate['workflow_cn_name'],
+                'payload': payload
+            }
+        return {
+            'checked': True,
+            'passed': False,
+            'workflow_id': quality_gate['workflow_id'],
+            'workflow_cn_name': quality_gate['workflow_cn_name'],
+            'payload': payload,
+            'detail': (result.stderr or stdout or '').strip()[:500]
+        }
+    except Exception as exc:
+        return {'checked': False, 'reason': 'quality_gate_exception', 'detail': str(exc)[:300]}
+
+def reconcile_quality_gate_node_failures(conn, notified_set):
+    if conn is None:
+        return []
+
+    results = []
+    tasks = conn.execute(
+        '''
+        SELECT DISTINCT task_id, workflow_id, workflow_cn_name, repair_mode, repair_of_task_id
+        FROM tasks
+        WHERE task_id IS NOT NULL AND task_id != ''
+        '''
+    ).fetchall()
+
+    for task_row in tasks:
+        task_id = task_row['task_id']
+        if not task_id:
+            continue
+        task_status = task_row['status'] if 'status' in task_row.keys() else None
+        if task_status not in ('DONE', 'FAILED'):
+            continue
+        if task_terminal_notification_exists(conn, task_id):
+            continue
+
+        quality_nodes = get_quality_gate_nodes(conn, task_id)
+        failing_node = next(
+            (
+                node for node in quality_nodes
+                if node.get('status') in ('FAILED', 'CIRCUIT_BROKEN')
+            ),
+            None
+        )
+        if not failing_node:
+            continue
+
+        repair_meta = {
+            'repair_mode': task_row['repair_mode'] if 'repair_mode' in task_row.keys() else 'new',
+            'repair_of_task_id': task_row['repair_of_task_id'] if 'repair_of_task_id' in task_row.keys() else None,
+            'workflow_cn_name': task_row['workflow_cn_name'] if 'workflow_cn_name' in task_row.keys() else None
+        }
+        quality_result = build_quality_gate_failure_result(
+            task_id,
+            task_row['workflow_id'] if 'workflow_id' in task_row.keys() else None,
+            task_row['workflow_cn_name'] if 'workflow_cn_name' in task_row.keys() else None,
+            failing_node.get('node_id'),
+            failing_node.get('status'),
+            f"质量门节点 {failing_node.get('node_id')} 处于 {failing_node.get('status')}"
+        )
+        record_quality_gate_audit(conn, task_id, failing_node.get('node_id'), quality_result, passed=False)
+        result = notify_quality_gate_failure(task_id, quality_result, notified_set, repair_meta=repair_meta, conn=conn, node_id=failing_node.get('node_id'))
+        results.append({
+            'task_id': task_id,
+            'node_id': failing_node.get('node_id'),
+            'status': failing_node.get('status'),
+            **result
+        })
+
+    return results
+
+def get_task_repair_meta(conn, task_id):
+    if conn is None or not task_id:
+        return None
+    row = conn.execute(
+        'SELECT repair_mode, repair_of_task_id, workflow_cn_name FROM tasks WHERE task_id = ?',
+        (task_id,)
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        'repair_mode': row['repair_mode'] if 'repair_mode' in row.keys() else 'new',
+        'repair_of_task_id': row['repair_of_task_id'] if 'repair_of_task_id' in row.keys() else None,
+        'workflow_cn_name': row['workflow_cn_name'] if 'workflow_cn_name' in row.keys() else None
+    }
+
 def notify_completion(event_data, notified_set, conn=None):
     """
     当检测到终态事件时，自动调用 adam_notifier 通知造物主。
@@ -1216,7 +1531,7 @@ def notify_completion(event_data, notified_set, conn=None):
     event = event_data.get('event', {})
     event_type = event.get('event', '')
     
-    if event_type not in ('NODE_COMPLETED', 'NODE_FAILED', 'DAG_COMPLETE'):
+    if event_type not in ('NODE_COMPLETED', 'NODE_FAILED', 'CIRCUIT_BROKEN', 'TOOL_GAP', 'DAG_COMPLETE'):
         return {'sent': False, 'reason': 'unsupported_event'}
     
     # 构造唯一事件 ID 防止重复通知
@@ -1234,24 +1549,63 @@ def notify_completion(event_data, notified_set, conn=None):
     note = event.get('note', event.get('description', ''))
     
     task_summary = get_task_runtime_summary(conn, task_id)
+    repair_meta = get_task_repair_meta(conn, task_id)
+    is_repair_task = bool(repair_meta and repair_meta.get('repair_mode') == 'repair')
+    repair_of_task_id = repair_meta.get('repair_of_task_id') if repair_meta else None
     is_single_node_task = bool(task_summary and task_summary['total'] <= 1)
     is_task_done = bool(task_summary and task_summary['status'] == 'DONE')
     is_task_failed = bool(task_summary and task_summary['status'] == 'FAILED')
+    task_quality_gate = get_task_quality_gate(conn, task_id) if conn is not None else None
+    quality_gate_nodes = get_quality_gate_nodes(conn, task_id) if conn is not None else []
+    quality_gate_node = next((node for node in quality_gate_nodes if node.get('node_id') == node_id), None)
 
     if event_type == 'NODE_COMPLETED':
         if not (is_single_node_task or is_task_done):
             return {'sent': False, 'reason': 'intermediate_node_no_notify'}
-        msg = f"✅ 任务完成 | {task_id}"
+        quality_result = run_quality_gate(conn, task_id)
+        if quality_result.get('checked') and quality_result.get('passed') is False:
+            record_quality_gate_audit(conn, task_id, node_id, quality_result, passed=False)
+            return notify_quality_gate_failure(task_id, quality_result, notified_set, repair_meta=repair_meta, conn=conn, node_id=node_id)
+        record_quality_gate_audit(conn, task_id, node_id, quality_result, passed=True)
+        if is_repair_task:
+            msg = f"🔧 修复完成 | {task_id}"
+            if repair_of_task_id:
+                msg += f"\n🎯 原任务: {repair_of_task_id}"
+        else:
+            msg = f"✅ 任务完成 | {task_id}"
         if node_id:
             msg += f"\n🧩 终态节点: {source} / {node_id}"
         if note:
             msg += f"\n📋 {note[:200]}"
-    elif event_type == 'NODE_FAILED':
+    elif event_type in ('NODE_FAILED', 'CIRCUIT_BROKEN'):
+        if quality_gate_node and quality_gate_node.get('status') in ('FAILED', 'CIRCUIT_BROKEN'):
+            quality_result = build_quality_gate_failure_result(
+                task_id,
+                task_quality_gate.get('workflow_id') if task_quality_gate else None,
+                task_quality_gate.get('workflow_cn_name') if task_quality_gate else (repair_meta.get('workflow_cn_name') if repair_meta else None),
+                quality_gate_node.get('node_id'),
+                quality_gate_node.get('status'),
+                f"质量门节点 {quality_gate_node.get('node_id')} 处于 {quality_gate_node.get('status')}"
+            )
+            record_quality_gate_audit(conn, task_id, quality_gate_node.get('node_id'), quality_result, passed=False)
+            return notify_quality_gate_failure(task_id, quality_result, notified_set, repair_meta=repair_meta, conn=conn, node_id=quality_gate_node.get('node_id'))
         error = event.get('error', '未知错误')
         if is_task_failed:
-            msg = f"❌ 任务失败 | {task_id}\n🧩 失败节点: {source} / {node_id}\n⚠️ {error}"
+            if is_repair_task:
+                msg = f"🔧 修复失败 | {task_id}"
+                if repair_of_task_id:
+                    msg += f"\n🎯 原任务: {repair_of_task_id}"
+                msg += f"\n🧩 失败节点: {source} / {node_id}\n⚠️ {error}"
+            else:
+                msg = f"❌ 任务失败 | {task_id}\n🧩 失败节点: {source} / {node_id}\n⚠️ {error}"
         else:
             msg = f"❌ 节点失败 | {task_id} / {node_id}\n🧩 {source}\n⚠️ {error}"
+    elif event_type == 'TOOL_GAP':
+        blocker = event.get('blocker_detail') or event.get('missing_capability') or event.get('error') or '工具或运行时能力不足'
+        msg = f"⚠️ TOOL_GAP | {task_id}"
+        if node_id:
+            msg += f"\n🧩 节点: {source} / {node_id}"
+        msg += f"\n⚠️ {blocker}"
     elif event_type == 'DAG_COMPLETE':
         msg = f"🎯 DAG 全部完成 | {task_id}"
     else:
@@ -1265,6 +1619,8 @@ def notify_completion(event_data, notified_set, conn=None):
         )
         if result.returncode == 0:
             notified_set.add(event_id)
+            if conn is not None:
+                record_task_terminal_notification(conn, task_id, node_id, event_type, msg)
             return {'sent': True, 'reason': 'ok'}
 
         detail = (result.stderr or result.stdout or '').strip()
@@ -1280,6 +1636,75 @@ def notify_completion(event_data, notified_set, conn=None):
             'detail': str(exc)[:300]
         }
 
+def notify_runtime_alert(alert_data, notified_set):
+    alert = alert_data.get('alert', {})
+    alert_type = alert.get('alert_type')
+    summary = alert.get('summary', '')
+    if not alert_type or not summary:
+        return {'sent': False, 'reason': 'invalid_alert'}
+
+    event_id = f"runtime_alert::{alert_type}::{summary[:120]}"
+    if event_id in notified_set:
+        return {'sent': False, 'reason': 'duplicate'}
+
+    if not os.path.exists(ADAM_NOTIFIER):
+        return {'sent': False, 'reason': 'notifier_missing'}
+
+    title = '工具权限受阻' if alert_type == 'TOOL_PERMISSION_DENIED' else '工具能力缺口'
+    msg = f"⚠️ {title}\n{summary[:500]}"
+    try:
+        result = subprocess.run(
+            ['python3', ADAM_NOTIFIER, 'notify', '--title', title, '--msg', msg, '--level', 'warning', '--source', 'session_recorder'],
+            capture_output=True, text=True, timeout=20, cwd=NERV_ROOT
+        )
+        if result.returncode == 0:
+            notified_set.add(event_id)
+            return {'sent': True, 'reason': 'ok'}
+        detail = (result.stderr or result.stdout or '').strip()
+        return {'sent': False, 'reason': 'notifier_failed', 'detail': detail[:300]}
+    except Exception as exc:
+        return {'sent': False, 'reason': 'exception', 'detail': str(exc)[:300]}
+
+def notify_quality_gate_failure(task_id, quality_result, notified_set, repair_meta=None, conn=None, node_id=None):
+    if not task_id or not quality_result or quality_result.get('passed') is True:
+        return {'sent': False, 'reason': 'invalid_quality_gate'}
+
+    event_id = f"quality_gate::{task_id}"
+    if event_id in notified_set:
+        return {'sent': False, 'reason': 'duplicate'}
+
+    if not os.path.exists(ADAM_NOTIFIER):
+        return {'sent': False, 'reason': 'notifier_missing'}
+
+    title = '修复后仍未达标' if repair_meta and repair_meta.get('repair_mode') == 'repair' else '质量未达标'
+    payload = quality_result.get('payload') or {}
+    issues = payload.get('issues') if isinstance(payload, dict) else []
+    issue_lines = []
+    for issue in (issues or [])[:5]:
+        code = issue.get('code', 'QUALITY_ISSUE')
+        message = issue.get('message', '')
+        issue_lines.append(f"- `{code}` {message}")
+    body = f"⚠️ {quality_result.get('workflow_cn_name', quality_result.get('workflow_id', 'workflow'))}\n任务: `{task_id}`"
+    if repair_meta and repair_meta.get('repair_of_task_id'):
+        body += f"\n原任务: `{repair_meta['repair_of_task_id']}`"
+    if issue_lines:
+        body += "\n\n" + "\n".join(issue_lines)
+
+    try:
+        result = subprocess.run(
+            ['python3', ADAM_NOTIFIER, 'notify', '--title', title, '--msg', body, '--level', 'warning', '--source', 'session_recorder'],
+            capture_output=True, text=True, timeout=20, cwd=NERV_ROOT
+        )
+        if result.returncode == 0:
+            notified_set.add(event_id)
+            if conn is not None:
+                record_task_terminal_notification(conn, task_id, node_id, 'QUALITY_GATE_FAILED', body)
+            return {'sent': True, 'reason': 'ok'}
+        detail = (result.stderr or result.stdout or '').strip()
+        return {'sent': False, 'reason': 'notifier_failed', 'detail': detail[:300]}
+    except Exception as exc:
+        return {'sent': False, 'reason': 'exception', 'detail': str(exc)[:300]}
+
 # ═══════════════════════════════════════════════════════════════
 # Memory Queue 写入
 # ═══════════════════════════════════════════════════════════════
@@ -1293,7 +1718,7 @@ def write_memory_queue(event_data, task_cache=None, conn=None):
     source_agent = event.get('source', '')
     
     # 只记录完成/失败事件
-    if event_type not in ('NODE_COMPLETED', 'NODE_FAILED', 'DAG_COMPLETE'):
+    if event_type not in ('NODE_COMPLETED', 'NODE_FAILED', 'CIRCUIT_BROKEN', 'DAG_COMPLETE'):
         return
 
     task_row = None
@@ -1686,6 +2111,8 @@ def main():
                         elif ev_type == 'dispatch':
                             d = ev['dispatch']
                             print(f"  [DISPATCH] → {d.get('target_agent','')}")
+                        elif ev_type == 'runtime_alert':
+                            print(f"  [RUNTIME_ALERT] {ev.get('alert', {}).get('alert_type', '')}")
                     else:
                         if ev['type'] == 'nerv_event':
                             outcome = record_nerv_event(conn, ev, task_cache)
@@ -1728,6 +2155,20 @@ def main():
                             outcome = record_dispatch(conn, ev, task_cache)
                             if outcome.get('ok'):
                                 total_recorded += 1
+                        elif ev['type'] == 'runtime_alert':
+                            outcome = record_runtime_alert(conn, ev)
+                            if outcome.get('ok'):
+                                total_recorded += 1
+                            notify_result = notify_runtime_alert(ev, notified_set)
+                            if notify_result.get('sent'):
+                                total_notified += 1
+                            elif notify_result.get('reason') not in ('duplicate', 'invalid_alert'):
+                                notification_failures.append({
+                                    'task_id': '',
+                                    'node_id': '',
+                                    'reason': notify_result['reason'],
+                                    'detail': notify_result.get('detail', '')
+                                })
                 
                 state[file_key] = new_offset
         
@@ -1736,6 +2177,18 @@ def main():
             reconcile_terminal_audit_states(conn)
             reconcile_failed_downstream_blocks(conn)
             reconcile_task_rollups(conn)
+            quality_gate_results = reconcile_quality_gate_node_failures(conn, notified_set)
+            if quality_gate_results:
+                for result in quality_gate_results:
+                    if result.get('sent'):
+                        total_notified += 1
+                    elif result.get('reason') not in ('duplicate', 'notifier_missing'):
+                        notification_failures.append({
+                            'task_id': result.get('task_id', ''),
+                            'node_id': result.get('node_id', ''),
+                            'reason': result.get('reason', ''),
+                            'detail': result.get('detail', '')
+                        })
             for task_id, trigger in wake_candidates.items():
                 wake_results.append({
                     'task_id': task_id,

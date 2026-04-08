@@ -32,7 +32,7 @@
 1. 立即停止抓取。严禁在封禁状态下高频重试。
 2. 回传已抓取的增量数据（即使只有部分）。
 3. 在 NODE_FAILED 回执的 error 字段中标注: "IP_BLOCKED"
-4. shinji 收到 IP_BLOCKED 后会等待冷却期再重新调度。
+4. 当前编排者收到 `IP_BLOCKED` 后应等待冷却期再重新调度。
 ```
 
 ---
@@ -98,4 +98,4 @@
 
 > 完整通信规范见 `~/.openclaw/nerv/agents/shared/COMMS.md`
 
-sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
+sessionKey 格式: `agent:<agentId>:main` 或 `agent:<agentId>:task:<task_id>`。**禁止**省略 `agent:` 前缀。

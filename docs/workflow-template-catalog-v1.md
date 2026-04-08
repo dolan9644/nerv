@@ -428,6 +428,29 @@ misato -> shinji -> eva00 -> eva13 -> rei
 - `qa_bank.json`
 - `qa_bank.md`
 
+**适用场景**
+
+- 直播高频异议整理
+- 客服常见问答更新
+- 下一场直播异议预判准备
+
+**节点**
+
+| node_id | family | canonical owner | 输入 | 输出 |
+|:--------|:-------|:----------------|:-----|:-----|
+| `cluster-objections` | `normalize` | `nerv-eva00` | `manual_input.json` | `objection_clusters.json` / `answer_map.json` |
+| `compose-qa-bank` | `compose` | `nerv-eva13` | `objection_clusters.json` / `answer_map.json` | `qa_bank.md` / `qa_bank.json` |
+| `notify-qa-bank` | `notify` | `nerv-misato` | `qa_bank.md` / `qa_bank.json` | `sent.json` |
+| `memory-objection-pattern` | `memory` | `nerv-rei` | `qa_bank.md` / `qa_bank.json` | `memory_note.json` |
+
+**fallback**
+
+- 没有有效异议输入：
+  - `TOOL_GAP`
+- 只有情绪化评价，没有明确异议：
+  - 允许 `PARTIAL`
+  - 但必须明确未形成正式答复库
+
 ---
 
 ## 第三波：`commerce_operations / ecommerce_ops`
@@ -486,6 +509,30 @@ misato -> shinji -> eva02/mari -> eva00 -> eva13 -> misato
 - `competitor_watch.md`
 - `delta.json`
 
+**适用场景**
+
+- 竞品卖点变化跟踪
+- 活动/价格带差异观察
+- 竞品评价风向整理
+
+**节点**
+
+| node_id | family | canonical owner | 输入 | 输出 |
+|:--------|:-------|:----------------|:-----|:-----|
+| `watch-competitor-signals` | `monitor` | `nerv-eva02` | `manual_input.json` | `watch.json` |
+| `collect-competitor-pages` | `collect` | `nerv-mari` | `manual_input.json` | `raw.json` |
+| `normalize-competitor-delta` | `normalize` | `nerv-eva00` | `manual_input.json` / `watch.json` / `raw.json` | `delta.json` |
+| `compose-competitor-watch` | `compose` | `nerv-eva13` | `delta.json` | `competitor_watch.md` |
+| `notify-competitor-watch` | `notify` | `nerv-misato` | `competitor_watch.md` / `delta.json` | `sent.json` |
+
+**fallback**
+
+- 没有有效竞品输入：
+  - `TOOL_GAP`
+- 公开竞品页不可达：
+  - 允许只基于手工记录继续
+  - `fallback_reason = competitor_inputs_manual_only`
+
 ### 模板 9：新品上新简报流
 
 ```text
@@ -539,9 +586,45 @@ misato
 - 多项目优先级流
 - blocker 升级流
 
+#### 模板 11：状态周报流
+
+**适用场景**
+
+- 项目状态周报
+- 阶段进展同步
+- blocker / 风险卡片
+
+**拓扑**
+
+```text
+misato
+  -> shinji
+      -> eva00 (normalize-status)
+      -> eva13 (compose-status-report)
+  -> misato (notify)
+  -> rei (memory, 异步后置)
+```
+
+**节点**
+
+| node_id | family | canonical owner | 输入 | 输出 |
+|:--------|:-------|:----------------|:-----|:-----|
+| `normalize-status` | `normalize` | `nerv-eva00` | `manual_input.json` | `status_snapshot.json` / `blockers.json` |
+| `compose-status-report` | `compose` | `nerv-eva13` | `status_snapshot.json` / `blockers.json` | `weekly_report.md` / `summary_card.md` |
+| `notify-status-report` | `notify` | `nerv-misato` | `weekly_report.md` / `summary_card.md` | `sent.json` |
+| `memory-status-pattern` | `memory` | `nerv-rei` | `weekly_report.md` / `blockers.json` | `memory_note.json` |
+
+**fallback**
+
+- 缺少核心状态输入：
+  - `TOOL_GAP`
+- 只有情绪化描述，没有进展事实：
+  - 允许 `PARTIAL`
+  - 但必须明确只形成状态摘要
+
 ### `finance_info`
 
-#### 模板 11：财讯简报流
+#### 模板 12：财讯简报流
 
 **适用场景**
 

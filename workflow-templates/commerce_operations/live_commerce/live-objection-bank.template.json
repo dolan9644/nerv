@@ -1,0 +1,72 @@
+{
+  "template_id": "live-objection-bank",
+  "version": "1.0",
+  "domain": "commerce_operations",
+  "subdomain": "live_commerce",
+  "summary": "直播异议库流：把评论、拒绝点和客服问答收成可复用异议答复库。",
+  "routing_hint": "dag",
+  "session_strategy": "task_scoped",
+  "execution_modes": ["manual_feedback"],
+  "default_execution_mode": "manual_feedback",
+  "inputs": {
+    "required": ["session_meta", "objection_source", "output_goal"],
+    "optional": ["product_list", "existing_answers", "must_include", "must_avoid", "tone_rules"],
+    "schema_ref": "docs/objection-handling-pack-spec-v1.md"
+  },
+  "platform_requirements": "not_applicable_for_manual_feedback",
+  "capability_gate": {
+    "missing_required_inputs_behavior": "tool_gap",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "missing_objection_inputs"
+  },
+  "delivery": {
+    "final_owner": "nerv-misato",
+    "notifier": "adam_notifier",
+    "memory_writeback": true
+  },
+  "acceptance": {
+    "clusters_require_trigger_quote_and_answer_direction": true,
+    "qa_bank_requires_do_and_dont_language": true,
+    "partial_allowed_for_sentiment_only_inputs": true
+  },
+  "planned_nodes": [
+    {
+      "node_id": "cluster-objections",
+      "family": "normalize",
+      "canonical_owner": "nerv-eva00",
+      "description": "把异议、拒绝点和客服问答整理成高频问题簇和答复方向。",
+      "input_artifacts": ["manual_input.json"],
+      "output_artifacts": ["objection_clusters.json", "answer_map.json"]
+    },
+    {
+      "node_id": "compose-qa-bank",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "把问题簇写成主播和客服可直接复用的答复库。",
+      "input_artifacts": ["objection_clusters.json", "answer_map.json"],
+      "output_artifacts": ["qa_bank.md", "qa_bank.json"]
+    },
+    {
+      "node_id": "notify-qa-bank",
+      "family": "notify",
+      "canonical_owner": "nerv-misato",
+      "description": "交付异议答复库。",
+      "input_artifacts": ["qa_bank.md", "qa_bank.json"],
+      "output_artifact": "sent.json"
+    },
+    {
+      "node_id": "memory-objection-pattern",
+      "family": "memory",
+      "canonical_owner": "nerv-rei",
+      "description": "异步提纯高复用异议模式、禁用表达和答复套路。",
+      "input_artifacts": ["qa_bank.md", "qa_bank.json"],
+      "output_artifact": "memory_note.json",
+      "optional": true
+    }
+  ],
+  "edges": [
+    { "from": "cluster-objections", "to": "compose-qa-bank" },
+    { "from": "compose-qa-bank", "to": "notify-qa-bank" },
+    { "from": "notify-qa-bank", "to": "memory-objection-pattern" }
+  ]
+}

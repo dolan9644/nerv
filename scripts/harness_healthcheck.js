@@ -45,19 +45,26 @@ const DB_CANDIDATES = [
 ];
 
 const issues = [];
+const WORKFLOW_NAVIGATION_REGISTRY = join(NERV_ROOT, 'docs', 'workflow-navigation-registry-v1.json');
 const REQUIRED_WORKFLOW_ASSETS = {
   workflow_templates: [
     join(NERV_ROOT, 'workflow-templates', 'commerce_operations', 'live_commerce', 'live-session-script.template.json'),
     join(NERV_ROOT, 'workflow-templates', 'commerce_operations', 'live_commerce', 'live-replay-summary.template.json'),
+    join(NERV_ROOT, 'workflow-templates', 'commerce_operations', 'live_commerce', 'live-objection-bank.template.json'),
     join(NERV_ROOT, 'workflow-templates', 'commerce_operations', 'ecommerce_ops', 'product-review-insight.template.json'),
+    join(NERV_ROOT, 'workflow-templates', 'commerce_operations', 'ecommerce_ops', 'competitor-watch.template.json'),
     join(NERV_ROOT, 'workflow-templates', 'project_ops', 'meeting-to-task.template.json'),
+    join(NERV_ROOT, 'workflow-templates', 'project_ops', 'status-report.template.json'),
     join(NERV_ROOT, 'workflow-templates', 'finance_info', 'finance-brief.template.json')
   ],
   misato_workflow_skills: [
     join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'live-session-script', 'SKILL.md'),
     join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'live-replay-summary', 'SKILL.md'),
+    join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'live-objection-bank', 'SKILL.md'),
     join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'product-review-insight', 'SKILL.md'),
+    join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'competitor-watch', 'SKILL.md'),
     join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'meeting-to-task', 'SKILL.md'),
+    join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'status-report', 'SKILL.md'),
     join(NERV_ROOT, 'agents', 'misato', 'SKILLS', 'finance-brief', 'SKILL.md')
   ]
 };
@@ -93,6 +100,21 @@ function safeReadJson(path) {
 function safeStat(path) {
   try {
     return statSync(path);
+  } catch {
+    return null;
+  }
+}
+
+function loadWorkflowRegistry() {
+  if (!existsSync(WORKFLOW_NAVIGATION_REGISTRY)) return null;
+  try {
+    const payload = JSON.parse(readFileSync(WORKFLOW_NAVIGATION_REGISTRY, 'utf-8'));
+    const workflows = Array.isArray(payload?.workflows) ? payload.workflows : [];
+    return {
+      payload,
+      workflows,
+      byId: new Map(workflows.map((workflow) => [workflow.workflow_id, workflow]))
+    };
   } catch {
     return null;
   }
@@ -479,7 +501,12 @@ function collectDatabaseHealth() {
     const taskColumnNames = new Set(taskColumns.map((row) => row.name));
     const nodeColumnNames = new Set(nodeColumns.map((row) => row.name));
     const skillColumnNames = new Set(skillRegistryColumns.map((row) => row.name));
-    const tasksWithoutDagJson = db.prepare("SELECT COUNT(*) AS count FROM tasks WHERE dag_json IS NULL OR dag_json = ''").get().count;
+    const tasksWithoutDagJson = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM tasks
+      WHERE status IN ('PENDING', 'RUNNING', 'PAUSED')
+        AND (dag_json IS NULL OR dag_json = '')
+    `).get().count;
     const taskSessionBindingsExists = db.prepare(`
       SELECT COUNT(*) AS count
       FROM sqlite_master
@@ -525,7 +552,8 @@ function collectDatabaseHealth() {
               FROM tasks t
               JOIN dag_nodes dn ON dn.task_id = t.task_id
               WHERE t.session_strategy = 'task_scoped'
-                AND dn.status IN ('PENDING', 'RUNNING', 'DONE', 'FAILED', 'BLOCKED')
+                AND t.status IN ('PENDING', 'RUNNING', 'PAUSED')
+                AND dn.status IN ('PENDING', 'RUNNING', 'BLOCKED')
             `).all();
             for (const row of rows) {
               let plannedSessionKey = null;
@@ -609,7 +637,7 @@ function collectDatabaseHealth() {
       localIssues.push({
         severity: 'WARN',
         code: 'TASKS_WITHOUT_DAG_JSON',
-        message: '存在缺少 dag_json 的任务，说明一部分任务状态来自补录而非实时结构化建图',
+        message: '存在活跃任务缺少 dag_json，说明一部分任务状态来自补录而非实时结构化建图',
         details: { count: tasksWithoutDagJson }
       });
     }
@@ -1023,6 +1051,436 @@ function collectWorkflowAssetHealth() {
   };
 }
 
+function collectWorkflowNavigationHealth() {
+  const localIssues = [];
+  const summary = {
+    registry_path: WORKFLOW_NAVIGATION_REGISTRY,
+    registered_workflows: 0,
+    missing_paths: [],
+    duplicate_workflow_ids: [],
+    missing_trigger_phrases: []
+  };
+
+  if (!existsSync(WORKFLOW_NAVIGATION_REGISTRY)) {
+    localIssues.push({
+      severity: 'CRITICAL',
+      code: 'WORKFLOW_REGISTRY_MISSING',
+      message: '缺少可调用 workflow 导航注册表',
+      details: { registry_path: WORKFLOW_NAVIGATION_REGISTRY }
+    });
+    return {
+      status: computeStatus(localIssues),
+      summary,
+      issues: localIssues
+    };
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(readFileSync(WORKFLOW_NAVIGATION_REGISTRY, 'utf-8'));
+  } catch (error) {
+    localIssues.push({
+      severity: 'CRITICAL',
+      code: 'WORKFLOW_REGISTRY_INVALID_JSON',
+      message: 'workflow 导航注册表不是合法 JSON',
+      details: { error: error.message }
+    });
+    return {
+      status: computeStatus(localIssues),
+      summary,
+      issues: localIssues
+    };
+  }
+
+  const workflows = Array.isArray(payload?.workflows) ? payload.workflows : [];
+  summary.registered_workflows = workflows.length;
+
+  if (workflows.length === 0) {
+    localIssues.push({
+      severity: 'CRITICAL',
+      code: 'WORKFLOW_REGISTRY_EMPTY',
+      message: 'workflow 导航注册表为空，入口 Agent 无法稳定导航固定 workflow'
+    });
+    return {
+      status: computeStatus(localIssues),
+      summary,
+      issues: localIssues
+    };
+  }
+
+  const seenIds = new Set();
+  const allowedEntryModes = new Set(['template', 'builder_script']);
+  const allowedStrategies = new Set(['main', 'task_scoped']);
+
+  for (const workflow of workflows) {
+    const workflowId = workflow?.workflow_id || null;
+    if (!workflowId) {
+      localIssues.push({
+        severity: 'CRITICAL',
+        code: 'WORKFLOW_REGISTRY_ITEM_MISSING_ID',
+        message: 'workflow 导航注册表存在缺少 workflow_id 的条目'
+      });
+      continue;
+    }
+
+    if (seenIds.has(workflowId)) {
+      summary.duplicate_workflow_ids.push(workflowId);
+      continue;
+    }
+    seenIds.add(workflowId);
+
+    if (!allowedEntryModes.has(workflow.entry_mode)) {
+      localIssues.push({
+        severity: 'WARN',
+        code: 'WORKFLOW_REGISTRY_ENTRY_MODE_UNKNOWN',
+        message: `workflow 资产 entry_mode 不合法: ${workflowId}`,
+        details: { entry_mode: workflow.entry_mode }
+      });
+    }
+
+    if (!allowedStrategies.has(workflow.session_strategy)) {
+      localIssues.push({
+        severity: 'WARN',
+        code: 'WORKFLOW_REGISTRY_SESSION_STRATEGY_UNKNOWN',
+        message: `workflow 资产 session_strategy 不合法: ${workflowId}`,
+        details: { session_strategy: workflow.session_strategy }
+      });
+    }
+
+    if (!Array.isArray(workflow.trigger_phrases) || workflow.trigger_phrases.length === 0) {
+      summary.missing_trigger_phrases.push(workflowId);
+    }
+
+    const requiredPathFields = ['misato_skill_path'];
+    if (workflow.entry_mode === 'template') requiredPathFields.push('template_path');
+    if (workflow.entry_mode === 'builder_script') requiredPathFields.push('builder_script');
+    if (workflow.spec_path) requiredPathFields.push('spec_path');
+    if (workflow.quality_gate_script) requiredPathFields.push('quality_gate_script');
+
+    for (const field of requiredPathFields) {
+      const relativePath = workflow[field];
+      if (!relativePath) {
+        summary.missing_paths.push({ workflow_id: workflowId, field, path: null });
+        continue;
+      }
+      const absolutePath = join(NERV_ROOT, relativePath);
+      if (!existsSync(absolutePath)) {
+        summary.missing_paths.push({ workflow_id: workflowId, field, path: absolutePath });
+      }
+    }
+  }
+
+  if (summary.duplicate_workflow_ids.length > 0) {
+    localIssues.push({
+      severity: 'CRITICAL',
+      code: 'WORKFLOW_REGISTRY_DUPLICATE_IDS',
+      message: 'workflow 导航注册表存在重复 workflow_id',
+      details: { workflow_ids: summary.duplicate_workflow_ids }
+    });
+  }
+
+  if (summary.missing_paths.length > 0) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'WORKFLOW_REGISTRY_PATH_MISSING',
+      message: 'workflow 导航注册表存在断路径，固定 workflow 可能无法被入口正确导航',
+      details: { missing_paths: summary.missing_paths }
+    });
+  }
+
+  if (summary.missing_trigger_phrases.length > 0) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'WORKFLOW_REGISTRY_TRIGGER_GAP',
+      message: '部分 workflow 缺少中文触发语句，入口层可能无法稳定命中',
+      details: { workflow_ids: summary.missing_trigger_phrases }
+    });
+  }
+
+  return {
+    status: computeStatus(localIssues),
+    summary,
+    issues: localIssues
+  };
+}
+
+function collectWorkflowExecutionHealth(databaseSummary) {
+  const localIssues = [];
+  const summary = {
+    tracked_tasks: 0,
+    unknown_workflow_ids: [],
+    metadata_incomplete: [],
+    entry_mode_drift: [],
+    session_strategy_drift: [],
+    entry_agent_drift: [],
+    audit_metadata_missing: []
+  };
+
+  const activeDbPath = databaseSummary?.summary?.active_db_path;
+  if (!activeDbPath || !existsSync(activeDbPath)) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'WORKFLOW_EXECUTION_DB_UNAVAILABLE',
+      message: '无法读取数据库，无法验证固定 workflow 的真实执行轨迹'
+    });
+    return {
+      status: computeStatus(localIssues),
+      summary,
+      issues: localIssues
+    };
+  }
+
+  const registry = loadWorkflowRegistry();
+  if (!registry) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'WORKFLOW_EXECUTION_REGISTRY_UNAVAILABLE',
+      message: 'workflow 导航注册表不可读，无法校验固定 workflow 的执行漂移'
+    });
+    return {
+      status: computeStatus(localIssues),
+      summary,
+      issues: localIssues
+    };
+  }
+
+  const db = openDb(activeDbPath);
+  if (!db) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'WORKFLOW_EXECUTION_DB_OPEN_FAILED',
+      message: '数据库存在，但无法打开以验证固定 workflow 执行情况'
+    });
+    return {
+      status: computeStatus(localIssues),
+      summary,
+      issues: localIssues
+    };
+  }
+
+  try {
+    const tasks = db.prepare(`
+      SELECT task_id, workflow_id, workflow_cn_name, entry_mode, resolved_from,
+             orchestrator_agent_id, session_strategy, status
+      FROM tasks
+      WHERE workflow_id IS NOT NULL AND workflow_id != ''
+      ORDER BY created_at DESC
+    `).all();
+    summary.tracked_tasks = tasks.length;
+
+    const latestDagCreated = new Map();
+    const auditRows = db.prepare(`
+      SELECT task_id, detail
+      FROM audit_logs
+      WHERE action = 'DAG_CREATED'
+      ORDER BY id DESC
+    `).all();
+    for (const row of auditRows) {
+      if (!row.task_id || latestDagCreated.has(row.task_id)) continue;
+      let detail = null;
+      try {
+        detail = row.detail ? JSON.parse(row.detail) : null;
+      } catch {
+        detail = null;
+      }
+      latestDagCreated.set(row.task_id, detail);
+    }
+
+    for (const task of tasks) {
+      const asset = registry.byId.get(task.workflow_id);
+      if (!asset) {
+        summary.unknown_workflow_ids.push(task.task_id);
+        continue;
+      }
+
+      if (!task.entry_mode || !task.resolved_from) {
+        summary.metadata_incomplete.push({
+          task_id: task.task_id,
+          workflow_id: task.workflow_id,
+          entry_mode: task.entry_mode,
+          resolved_from: task.resolved_from
+        });
+      }
+
+      if (task.entry_mode && task.entry_mode !== asset.entry_mode) {
+        summary.entry_mode_drift.push({
+          task_id: task.task_id,
+          workflow_id: task.workflow_id,
+          expected: asset.entry_mode,
+          actual: task.entry_mode
+        });
+      }
+
+      if (task.session_strategy && task.session_strategy !== asset.session_strategy) {
+        summary.session_strategy_drift.push({
+          task_id: task.task_id,
+          workflow_id: task.workflow_id,
+          expected: asset.session_strategy,
+          actual: task.session_strategy
+        });
+      }
+
+      if (task.orchestrator_agent_id && task.orchestrator_agent_id !== asset.entry_agent) {
+        summary.entry_agent_drift.push({
+          task_id: task.task_id,
+          workflow_id: task.workflow_id,
+          expected: asset.entry_agent,
+          actual: task.orchestrator_agent_id
+        });
+      }
+
+      const dagCreatedDetail = latestDagCreated.get(task.task_id);
+      if (!dagCreatedDetail || dagCreatedDetail.workflow_id !== task.workflow_id || dagCreatedDetail.entry_mode !== task.entry_mode) {
+        summary.audit_metadata_missing.push({
+          task_id: task.task_id,
+          workflow_id: task.workflow_id
+        });
+      }
+    }
+  } finally {
+    db.close();
+  }
+
+  if (summary.unknown_workflow_ids.length > 0) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'TASK_WORKFLOW_UNKNOWN',
+      message: '存在 task.workflow_id 在导航注册表中不存在，说明入口或 builder 产出了未注册链路',
+      details: { task_ids: summary.unknown_workflow_ids.slice(0, 20) }
+    });
+  }
+
+  if (summary.metadata_incomplete.length > 0) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'TASK_WORKFLOW_METADATA_INCOMPLETE',
+      message: '存在固定 workflow 任务缺少 entry_mode 或 resolved_from，无法完整追踪入口决策',
+      details: { examples: summary.metadata_incomplete.slice(0, 10) }
+    });
+  }
+
+  if (summary.entry_mode_drift.length > 0) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'TASK_WORKFLOW_ENTRY_MODE_DRIFT',
+      message: '存在命中固定 workflow 后，任务记录的 entry_mode 与注册表不一致',
+      details: { examples: summary.entry_mode_drift.slice(0, 10) }
+    });
+  }
+
+  if (summary.session_strategy_drift.length > 0) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'TASK_WORKFLOW_SESSION_STRATEGY_DRIFT',
+      message: '存在命中固定 workflow 后，任务 session_strategy 与注册表不一致',
+      details: { examples: summary.session_strategy_drift.slice(0, 10) }
+    });
+  }
+
+  if (summary.entry_agent_drift.length > 0) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'TASK_WORKFLOW_ENTRY_AGENT_DRIFT',
+      message: '存在命中固定 workflow 后，实际 orchestrator 与注册表不一致',
+      details: { examples: summary.entry_agent_drift.slice(0, 10) }
+    });
+  }
+
+  if (summary.audit_metadata_missing.length > 0) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'TASK_WORKFLOW_AUDIT_METADATA_MISSING',
+      message: '存在固定 workflow 任务缺少与建图审计一致的 workflow 元数据，说明执行轨迹证据不完整',
+      details: { examples: summary.audit_metadata_missing.slice(0, 10) }
+    });
+  }
+
+  return {
+    status: computeStatus(localIssues),
+    summary,
+    issues: localIssues
+  };
+}
+
+function collectBootstrapAlignmentHealth() {
+  const localIssues = [];
+  const summary = {
+    scanned_files: 0,
+    stale_upstream_bindings: [],
+    stale_main_session_bindings: []
+  };
+
+  const checks = [
+    join(NERV_ROOT, 'agents', 'mari', 'AGENTS.md'),
+    join(NERV_ROOT, 'agents', 'mari', 'TOOLS.md'),
+    join(NERV_ROOT, 'agents', 'mari', 'SKILLS.md'),
+    join(NERV_ROOT, 'agents', 'eva-03', 'AGENTS.md'),
+    join(NERV_ROOT, 'agents', 'eva-03', 'TOOLS.md'),
+    join(NERV_ROOT, 'agents', 'eva-03', 'SKILLS.md'),
+    join(NERV_ROOT, 'agents', 'eva-series', 'AGENTS.md'),
+    join(NERV_ROOT, 'agents', 'eva-series', 'TOOLS.md'),
+    join(NERV_ROOT, 'agents', 'eva-series', 'SKILLS.md'),
+    join(NERV_ROOT, 'agents', 'eva-00', 'AGENTS.md'),
+    join(NERV_ROOT, 'agents', 'eva-00', 'TOOLS.md'),
+    join(NERV_ROOT, 'agents', 'eva-02', 'AGENTS.md'),
+    join(NERV_ROOT, 'agents', 'eva-02', 'TOOLS.md'),
+    join(NERV_ROOT, 'agents', 'eva-13', 'AGENTS.md'),
+    join(NERV_ROOT, 'agents', 'eva-13', 'TOOLS.md'),
+    join(NERV_ROOT, 'agents', 'gendo', 'AGENTS.md'),
+    join(NERV_ROOT, 'agents', 'gendo', 'TOOLS.md'),
+    join(NERV_ROOT, 'agents', 'misato', 'AGENTS.md'),
+    join(NERV_ROOT, 'agents', 'misato', 'TOOLS.md')
+  ];
+  const staleUpstreamPatterns = [
+    /给\s*nerv-shinji\s*返回/,
+    /向\s*shinji\s*报告/,
+    /完成后\s*sessions_send\s*回\s*shinji/,
+    /接收\s*shinji\s*通过/,
+    /来自\s*nerv-shinji/
+  ];
+  const staleMainTokens = [
+    'misato:main',
+    'agent:nerv-misato:main'
+  ];
+
+  for (const file of checks) {
+    if (!existsSync(file)) continue;
+    summary.scanned_files += 1;
+    const text = readFileSync(file, 'utf-8');
+    if (staleUpstreamPatterns.some((pattern) => pattern.test(text))) {
+      summary.stale_upstream_bindings.push(file);
+    }
+    const lines = text.split('\n');
+    if (lines.some((line) => staleMainTokens.some((token) => line.includes(token)) && !line.includes('不把'))) {
+      summary.stale_main_session_bindings.push(file);
+    }
+  }
+
+  if (summary.stale_upstream_bindings.length > 0) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'BOOTSTRAP_STALE_UPSTREAM_BINDING',
+      message: '部分 Agent 启动文件仍把固定上级写死成 shinji，和 dispatch.source + task_scoped 规则冲突',
+      details: { files: summary.stale_upstream_bindings.slice(0, 20) }
+    });
+  }
+
+  if (summary.stale_main_session_bindings.length > 0) {
+    localIssues.push({
+      severity: 'WARN',
+      code: 'BOOTSTRAP_STALE_MAIN_SESSION_BINDING',
+      message: '部分 Agent 启动文件仍把 misato:main 写死成默认回执目标',
+      details: { files: summary.stale_main_session_bindings.slice(0, 20) }
+    });
+  }
+
+  return {
+    status: computeStatus(localIssues),
+    summary,
+    issues: localIssues
+  };
+}
+
 function main() {
   const cron = collectCronHealth();
   const config = collectConfigHealth();
@@ -1032,6 +1490,9 @@ function main() {
   const feishu = collectFeishuHealth(config);
   const contract = collectContractReadiness();
   const workflowAssets = collectWorkflowAssetHealth();
+  const workflowNavigation = collectWorkflowNavigationHealth();
+  const workflowExecution = collectWorkflowExecutionHealth(database);
+  const bootstrapAlignment = collectBootstrapAlignmentHealth();
 
   const allIssues = [
     ...cron.issues,
@@ -1041,7 +1502,10 @@ function main() {
     ...skills.issues,
     ...feishu.issues,
     ...contract.issues,
-    ...workflowAssets.issues
+    ...workflowAssets.issues,
+    ...workflowNavigation.issues,
+    ...workflowExecution.issues,
+    ...bootstrapAlignment.issues
   ];
   for (const issue of allIssues) issues.push(issue);
 
@@ -1057,6 +1521,9 @@ function main() {
       warn: issues.filter((issue) => issue.severity === 'WARN').length,
       ok_checks: [cron, config, database, recorder, skills, feishu, contract].filter((check) => check.status === 'OK').length
         + (workflowAssets.status === 'OK' ? 1 : 0)
+        + (workflowNavigation.status === 'OK' ? 1 : 0)
+        + (workflowExecution.status === 'OK' ? 1 : 0)
+        + (bootstrapAlignment.status === 'OK' ? 1 : 0)
     },
     checks: {
       cron,
@@ -1066,7 +1533,10 @@ function main() {
       skills,
       feishu,
       contract,
-      workflow_assets: workflowAssets
+      workflow_assets: workflowAssets,
+      workflow_navigation: workflowNavigation,
+      workflow_execution: workflowExecution,
+      bootstrap_alignment: bootstrapAlignment
     },
     issues
   };

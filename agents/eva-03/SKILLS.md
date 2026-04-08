@@ -7,4 +7,4 @@
 ## 核心工具
 - `exec` — 运行 `gh` CLI 及基础命令（`ls`, `cat`, `head`, `rm` 等，**仅限 sandbox 内**）
 - `read` / `write` — 写入搜索结果到 `shared/inbox/`；**允许对 `sandbox_io/` 中克隆的仓库进行只读提取**
-- `sessions_send` — 向 shinji（模式 A）或 gendo（模式 B）返回结果
+- `sessions_send` — 模式 A 回当前编排者，模式 B 回 `gendo`

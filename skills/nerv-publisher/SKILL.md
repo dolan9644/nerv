@@ -14,6 +14,7 @@ metadata: { "openclaw": { "emoji": "📡", "os": ["darwin", "linux"], "requires"
 ## 调用方式
 gendo 通过 `exec` 工具调用：
 ```bash
+node {baseDir}/scripts/pre_publish_security_gate.js
 python3 {baseDir}/scripts/publish.py --config {baseDir}/config.json --task-id <TASK_ID>
 ```
 
@@ -26,6 +27,12 @@ python3 {baseDir}/scripts/publish.py --config {baseDir}/config.json --task-id <T
 - 成功：更新 `dag_nodes.status = COMPLETED`，记录发布 URL
 - 失败：更新 `dag_nodes.status = FAILED`，记录错误信息
 - 通过 `sessions_send` 通知 misato 发布结果
+
+## 发布前安全闸门
+
+- 先运行 `scripts/pre_publish_security_gate.js`
+- 发现 staged 变更里有 `.env`、密钥、审计原文中的敏感文本或高风险模式时，直接阻断发布
+- 闸门通过后，才允许调用 `publish.py`
 
 ## 支持的平台
 - 小红书（XHS）

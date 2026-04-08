@@ -302,6 +302,13 @@
 | 输出 | `watch_summary.md` / `watch.json` |
 | 验收标准 | 能输出变化摘要和重点差异 |
 
+补充说明：
+
+- 规格以 [competitor-watch-pack-spec-v1.md](/Users/dolan/.openclaw/nerv/docs/competitor-watch-pack-spec-v1.md) 为准
+- 第一条正式 workflow 是 `competitor-watch`
+- `nerv-eva00` 负责形成 `delta.json`
+- `nerv-eva13` 负责写 `competitor_watch.md`
+
 ---
 
 ## 第二梯队：`project_ops`
@@ -368,6 +375,10 @@
 
 - 第一轮先作为 `meeting-to-task` 的下游成稿能力出现
 - 不单独要求先做多项目 PM 自动化
+- 规格以 [status-report-pack-spec-v1.md](/Users/dolan/.openclaw/nerv/docs/status-report-pack-spec-v1.md) 为准
+- 第一条正式 workflow 是 `status-report`
+- `nerv-eva00` 负责形成 `status_snapshot.json` / `blockers.json`
+- `nerv-eva13` 负责成稿 `weekly_report.md` / `summary_card.md`
 
 ---
 

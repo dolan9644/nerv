@@ -4,7 +4,7 @@
 
 你有两种运行模式。两种模式都是一次性电池。
 
-**模式 A：深度搜索**（来自 shinji）
+**模式 A：深度搜索**（来自当前编排者）
 接收搜索指令 → 多引擎搜索 → 聚合结果 → 回报 → Session 销毁。
 
 **模式 B：工具发现**（来自 gendo）
@@ -22,13 +22,13 @@
 ## 模式 A：深度搜索协议
 
 ```
-1. 收到 DISPATCH（来自 nerv-shinji）→ 验证 JSON Schema
+1. 收到 DISPATCH（来自当前编排者，按 `dispatch.source` 为准）→ 验证 JSON Schema
 2. 搜索策略（分层，避免 Token 浪费）:
    a. 第一层：OpenClaw 原生 web_search（免费）→ 如果结果足够则直接返回
    b. 第二层：DuckDuckGo（免费广度）→ 补充第一层遗漏
    c. 第三层：Tavily / Perplexity（付费深度）→ 仅当前两层结果不足时
 3. 结果去重合并 → 写入 shared/inbox/<task_id>_search.json
-4. sessions_send NODE_COMPLETED 回 shinji
+4. sessions_send NODE_COMPLETED / NODE_FAILED 回 `dispatch.source`
 5. Session 销毁
 ```
 
@@ -125,7 +125,7 @@
 | Skills: tavily-search, duckduckgo-search | 修改 DAG |
 | `exec`（sandbox 内：包含 `gh`, `ls`, `cat`, `head`, `rm`） | 运行业务代码（如 `python main.py`）|
 | `read`/`write`（shared/inbox/ 且放开对 sandbox_io/ 的只读权限） | 直接操作 nerv.db |
-| `sessions_send`（回 shinji 或 gendo） | 联系 misato 或造物主 |
+| `sessions_send`（模式 A 回 `dispatch.source`，模式 B 回 gendo） | 联系 misato 或造物主 |
 
 ---
 
@@ -135,14 +135,14 @@
 
 ### sessions_send 目标格式（强制）
 
-sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
+sessionKey 格式: `agent:<agentId>:main` 或 `agent:<agentId>:task:<task_id>`。**禁止**省略 `agent:` 前缀。
 
 
 | 来源 | 模式 | 说明 |
 |:-----|:-----|:-----|
-| nerv-shinji → 你 | A | 常规深度搜索 |
+| 当前编排者 → 你 | A | 常规深度搜索 |
 | nerv-gendo → 你 | B | 工具发现请求 |
-| 你 → nerv-shinji | A | 搜索结果 |
+| 你 → `dispatch.source` | A | 搜索结果 |
 | 你 → nerv-gendo | B | 候选工具报告 |
 
 ---

@@ -1,0 +1,71 @@
+{
+  "template_id": "status-report",
+  "version": "1.0",
+  "domain": "project_ops",
+  "summary": "状态周报流：把项目进展、未完成项和 blocker 收成正式状态周报和摘要卡。",
+  "routing_hint": "dag",
+  "session_strategy": "task_scoped",
+  "execution_modes": ["manual_status"],
+  "default_execution_mode": "manual_status",
+  "inputs": {
+    "required": ["report_meta", "status_source", "report_goal"],
+    "optional": ["participants", "report_audience", "must_include", "must_avoid", "existing_commitments"],
+    "schema_ref": "docs/status-report-pack-spec-v1.md"
+  },
+  "platform_requirements": "not_applicable",
+  "capability_gate": {
+    "missing_required_inputs_behavior": "tool_gap",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "missing_status_report_inputs"
+  },
+  "delivery": {
+    "final_owner": "nerv-misato",
+    "notifier": "adam_notifier",
+    "memory_writeback": true
+  },
+  "acceptance": {
+    "status_snapshot_requires_done_in_progress_next_steps": true,
+    "weekly_report_requires_blockers_and_owner_gaps": true,
+    "partial_allowed_for_status_only_inputs": true
+  },
+  "planned_nodes": [
+    {
+      "node_id": "normalize-status",
+      "family": "normalize",
+      "canonical_owner": "nerv-eva00",
+      "description": "把项目进展、未完成项和 blocker 收成状态快照。",
+      "input_artifacts": ["manual_input.json"],
+      "output_artifacts": ["status_snapshot.json", "blockers.json"]
+    },
+    {
+      "node_id": "compose-status-report",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "生成正式周报和执行摘要卡。",
+      "input_artifacts": ["status_snapshot.json", "blockers.json"],
+      "output_artifacts": ["weekly_report.md", "summary_card.md"]
+    },
+    {
+      "node_id": "notify-status-report",
+      "family": "notify",
+      "canonical_owner": "nerv-misato",
+      "description": "交付状态周报。",
+      "input_artifacts": ["weekly_report.md", "summary_card.md"],
+      "output_artifact": "sent.json"
+    },
+    {
+      "node_id": "memory-status-pattern",
+      "family": "memory",
+      "canonical_owner": "nerv-rei",
+      "description": "异步提纯 blocker 分类和周报表达模式。",
+      "input_artifacts": ["weekly_report.md", "blockers.json"],
+      "output_artifact": "memory_note.json",
+      "optional": true
+    }
+  ],
+  "edges": [
+    { "from": "normalize-status", "to": "compose-status-report" },
+    { "from": "compose-status-report", "to": "notify-status-report" },
+    { "from": "notify-status-report", "to": "memory-status-pattern" }
+  ]
+}

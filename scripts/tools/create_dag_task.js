@@ -18,6 +18,13 @@
  *   "initiator_id": "string (必填)",
  *   "intent": "string (必填)",
  *   "priority": "number 0-5 (可选，默认 0)",
+ *   "repair_mode": "new | repair (可选，默认 new)",
+ *   "repair_of_task_id": "string (可选，返工任务对应旧 task_id)",
+ *   "target_session_key": "string (可选，返工时优先复用的旧会话)",
+ *   "workflow_id": "string (可选，命中固定 workflow 时填写)",
+ *   "workflow_cn_name": "string (可选，中文工作流名)",
+ *   "entry_mode": "template | builder_script | freeform (可选)",
+ *   "resolved_from": "string (可选，query / workflow_id / manual 等)",
  *   "orchestrator_agent_id": "string (可选，默认 nerv-misato)",
  *   "orchestrator_session_key": "string (可选)",
  *   "session_strategy": "main | task_scoped (可选，默认 task_scoped)",
@@ -31,6 +38,8 @@ import { createFullDag, closeDb } from '../db.js';
 
 const CONTRACT_VERSION = '1.0';
 const SESSION_STRATEGIES = new Set(['main', 'task_scoped']);
+const ENTRY_MODES = new Set(['template', 'builder_script', 'freeform']);
+const REPAIR_MODES = new Set(['new', 'repair']);
 const DISPATCH_MODES = new Set(['agent_session', 'tool_exec', 'approval_gate', 'human_input', 'cron_only']);
 const COMPLETION_MODES = new Set(['event_only', 'artifact_only', 'event_and_artifact', 'event_or_artifact', 'approval_only']);
 const ACCEPTED_EVENTS = new Set(['NODE_COMPLETED', 'NODE_FAILED', 'NODE_OBSERVED_DONE', 'NODE_OBSERVED_FAILED']);
@@ -99,6 +108,39 @@ function validateInput(input) {
     if (typeof input.priority !== 'number' || input.priority < 0 || input.priority > 5 || !Number.isInteger(input.priority)) {
       errors.push('priority 必须是 0-5 之间的整数');
     }
+  }
+  if (input.repair_mode !== undefined && !REPAIR_MODES.has(input.repair_mode)) {
+    errors.push('repair_mode 只能是 "new" 或 "repair"');
+  }
+  if (input.repair_of_task_id !== undefined && (typeof input.repair_of_task_id !== 'string' || input.repair_of_task_id.trim().length === 0)) {
+    errors.push('repair_of_task_id 必须是非空字符串');
+  }
+  if (input.target_session_key !== undefined && (typeof input.target_session_key !== 'string' || input.target_session_key.trim().length === 0)) {
+    errors.push('target_session_key 必须是非空字符串');
+  }
+  if (input.repair_mode === 'repair' && !input.repair_of_task_id) {
+    errors.push('repair_mode=repair 时必须提供 repair_of_task_id');
+  }
+  if (input.repair_mode !== 'repair' && input.repair_of_task_id !== undefined) {
+    errors.push('仅在 repair_mode=repair 时允许传入 repair_of_task_id');
+  }
+  if (input.workflow_id !== undefined && (typeof input.workflow_id !== 'string' || input.workflow_id.trim().length === 0)) {
+    errors.push('workflow_id 必须是非空字符串');
+  }
+  if (input.workflow_cn_name !== undefined && (typeof input.workflow_cn_name !== 'string' || input.workflow_cn_name.trim().length === 0)) {
+    errors.push('workflow_cn_name 必须是非空字符串');
+  }
+  if (input.entry_mode !== undefined && !ENTRY_MODES.has(input.entry_mode)) {
+    errors.push('entry_mode 只能是 "template"、"builder_script" 或 "freeform"');
+  }
+  if (input.resolved_from !== undefined && (typeof input.resolved_from !== 'string' || input.resolved_from.trim().length === 0)) {
+    errors.push('resolved_from 必须是非空字符串');
+  }
+  if (input.workflow_id !== undefined && input.entry_mode === undefined) {
+    errors.push('命中固定 workflow 时必须同时声明 entry_mode');
+  }
+  if (input.entry_mode !== undefined && input.workflow_id === undefined && input.entry_mode !== 'freeform') {
+    errors.push('entry_mode=template/builder_script 时必须同时声明 workflow_id');
   }
   if (input.orchestrator_agent_id !== undefined && (typeof input.orchestrator_agent_id !== 'string' || input.orchestrator_agent_id.trim().length === 0)) {
     errors.push('orchestrator_agent_id 必须是非空字符串');
@@ -372,7 +414,14 @@ function buildEntryDispatches(workerSessions, nodeDefs, edges, sessionStrategy) 
         description: node.description || '',
         session_key: binding.session_key || null,
         session_scope: binding.session_scope || 'main',
-        session_strategy: sessionStrategy
+        session_strategy: sessionStrategy,
+        dispatch_payload: {
+          description: node?.contract?.dispatch_contract?.description || node.description || '',
+          input_paths: Array.isArray(node?.contract?.dispatch_contract?.input_paths) ? node.contract.dispatch_contract.input_paths : [],
+          output_dir: node?.contract?.dispatch_contract?.output_dir || null,
+          constraints: node?.contract?.dispatch_contract?.constraints || {}
+        },
+        dispatch_contract: node?.contract?.dispatch_contract || null
       };
     });
 }
@@ -407,6 +456,13 @@ async function main() {
       initiatorId: input.initiator_id,
       intent: input.intent,
       priority: input.priority ?? 0,
+      repairMode: input.repair_mode || 'new',
+      repairOfTaskId: input.repair_of_task_id || null,
+      targetSessionKey: input.target_session_key || null,
+      workflowId: input.workflow_id || null,
+      workflowCnName: input.workflow_cn_name || null,
+      entryMode: input.entry_mode || null,
+      resolvedFrom: input.resolved_from || null,
       orchestratorAgentId: input.orchestrator_agent_id || 'nerv-misato',
       orchestratorSessionKey: input.orchestrator_session_key || null,
       sessionStrategy: input.session_strategy || 'task_scoped',
@@ -419,6 +475,13 @@ async function main() {
       task_id: result.taskId,
       nodes_created: result.nodesCreated,
       edges_created: result.edgesCreated,
+      repair_mode: result.repairMode,
+      repair_of_task_id: result.repairOfTaskId,
+      target_session_key: result.targetSessionKey,
+      workflow_id: result.workflowId,
+      workflow_cn_name: result.workflowCnName,
+      entry_mode: result.entryMode,
+      resolved_from: result.resolvedFrom,
       orchestrator_session_key: result.orchestratorSessionKey,
       session_strategy: result.sessionStrategy,
       worker_sessions: result.workerSessions,

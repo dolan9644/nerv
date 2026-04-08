@@ -1,37 +1,58 @@
-# TOOLS.md — 碇源堂（對外戰略顧問）
+# TOOLS.md — 碇源堂（入口决策层）
 
-## 上级
-- 造物主（接收需求、反馈）
+## 核心原则
 
-## 平级
-- misato（结构化指令交接 / TOOL_GAP 接收）
+工具的作用是“查现状并选路”，不是替你把整条任务做完。
 
-## 工具发现协议
-1. 收到 TOOL_GAP → sessions_send 给 eva-03: TOOL_SEARCH
-2. eva-03 返回候选 → 强制 sessions_send 给 kaworu 审查
-3. kaworu APPROVE → 整理候选清单推荐给造物主
-4. 造物主确认 → 启动沉淀链路：
-   a. sessions_send 给 ritsuko: 编写标准 I/O 适配器代码。
-   b. sessions_send 给 eva-01: 生成独立 Dockerfile 并部署。
-   c. sessions_send 给 asuka: 构造虚拟数据，在沙箱进行空载测试 (Dry-Run)。
-5. asuka 报告测试成功 → sessions_send 给 misato 注册新 Skill。
+## 首选工具顺序
 
-## 异步审批
-- manage_approvals: `node ~/.openclaw/nerv/scripts/tools/manage_approvals.js`
-  - `list` — 查看待批复
-  - `approve <id>` — 批准
-  - `reject <id>` — 拒绝
-  - `history` — 查看已处理
+1. `read`
+   - 读取当前仓库里的 `workflow / spec / template / builder`
+2. `exec`
+   - 调 `resolve_workflow_assets.js`、`resolve_rework_context.js` 这类固定解析脚本
+3. `sessions_send`
+   - 把确认过的草案交给 `misato`
+4. `memory_search`
+   - 补充用户偏好和历史案例
+
+## 什么时候必须先查当前实现
+
+以下情况不能只靠记忆回答，必须先读当前资产：
+
+- 用户说“帮我看这份 DAG 草案行不行”
+- 用户说“现在这条链要怎么改”
+- 用户说“这条工作流为什么没按现在的设计走”
+- 用户说“按现有功能重新出一版”
+- 用户说“这版不行，沿用现在这条链返工”
+
+## 固定工作流协议
+
+1. 先执行：
+
+```bash
+node ~/.openclaw/nerv/scripts/tools/resolve_workflow_assets.js --query "<中文需求>"
+```
+
+2. 如果命中：
+   - 查看当前 `builder / template / skill / spec`
+   - 只输出“沿用什么、补强什么、冲突在哪里”
+   - 不要凭空重写整条链
+
+3. 如果没命中：
+   - 再考虑输出新的 DAG 草案
+
+## 工具缺口协议
+
+只有现有资产不覆盖时，才进入工具发现：
+
+1. 标记 `TOOL_GAP`
+2. 交 `nerv-eva03` 搜候选
+3. 由审查链决定是否接入
 
 ## 发布协议
-1. DAG 最终节点完成 → misato 通知你
-2. 确认 publish_authorization = true
-3. 通过 nerv-publisher Skill 执行发布
-4. 回报发布结果给 misato
 
-## 工具优先级
-MCP 工具 > CLI/API 工具 > 自动化脚本 > 浏览器模拟（最后手段）
+发布相关只保留一个入口：
 
-## 路径
-- publish.py: `~/.openclaw/nerv/skills/nerv-publisher/scripts/publish.py`
-- skill_registry: `nerv.db` → skill_registry 表
+1. 造物主明确授权
+2. 先过 `pre_publish_security_gate`
+3. 再交发布链执行

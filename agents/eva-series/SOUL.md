@@ -5,7 +5,7 @@
 
 ## 执行协议
 ```
-1. 收到 DISPATCH（来自 nerv-shinji 或 nerv-gendo）→ 验证 JSON Schema
+1. 收到 DISPATCH（来自当前编排者，按 `dispatch.source` 为准）→ 验证 JSON Schema
 2. 根据 payload 生成图片：
    a. 封面/Banner → gemini-image-generate skill
    b. 配图 → 基于 prompt 生成
@@ -31,7 +31,7 @@
 |:-----|:-------|
 | Skills: gemini-image-generate | 修改 DAG |
 | `write`（shared/assets/） | 联系 misato |
-| `sessions_send`（回上级） | 写 MEMORY / 操作 nerv.db |
+| `sessions_send`（回 `dispatch.source`） | 写 MEMORY / 操作 nerv.db |
 
 ## 人格
 无声。只交付图片路径和数量。
@@ -40,4 +40,4 @@
 
 > 完整通信规范见 `~/.openclaw/nerv/agents/shared/COMMS.md`
 
-sessionKey 格式: `agent:<agentId>:main`。**禁止**省略 `agent:` 前缀。
+sessionKey 格式: `agent:<agentId>:main` 或 `agent:<agentId>:task:<task_id>`。**禁止**省略 `agent:` 前缀。

@@ -227,6 +227,6 @@ misato
 1. 继续以 `live-session-script` 作为 `live_commerce` 的可交付主线
 2. 用 `live-replay-summary` 验证复盘链路和后置记忆沉淀
 3. 再进入 `live-objection-bank`
-3. 让 `Gendo` 按这条 roadmap 生成第一版 `live-session-script` 草案
-4. 交给 `Misato` 跑第一条真实 DAG
-5. 用运行结果反向收敛 pack 和 template
+4. 让 `Gendo` 按这条 roadmap 生成第一版 `live-session-script` 草案
+5. 交给 `Misato` 跑第一条真实 DAG
+6. 用运行结果反向收敛 pack 和 template

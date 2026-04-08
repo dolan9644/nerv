@@ -1,0 +1,93 @@
+{
+  "template_id": "competitor-watch",
+  "version": "1.0",
+  "domain": "commerce_operations",
+  "subdomain": "ecommerce_ops",
+  "summary": "竞品跟踪流：整理竞品卖点、价格带、活动变化和评价风向差异。",
+  "routing_hint": "dag",
+  "session_strategy": "task_scoped",
+  "execution_modes": ["manual_watch", "manual_watch_plus_collect"],
+  "default_execution_mode": "manual_watch",
+  "inputs": {
+    "required": ["watch_meta", "competitor_source", "watch_goal"],
+    "optional": ["our_product_context", "price_band_rules", "must_include", "must_avoid", "time_window"],
+    "schema_ref": "docs/competitor-watch-pack-spec-v1.md"
+  },
+  "platform_requirements": "not_applicable_for_manual_watch",
+  "capability_gate": {
+    "missing_required_inputs_behavior": "tool_gap",
+    "tool_gap_event": "TOOL_GAP",
+    "tool_gap_reason": "missing_competitor_watch_inputs",
+    "collect_upgrade_requires_explicit_input": true
+  },
+  "delivery": {
+    "final_owner": "nerv-misato",
+    "notifier": "adam_notifier",
+    "memory_writeback": true
+  },
+  "acceptance": {
+    "delta_requires_source_and_impact_note": true,
+    "watch_requires_followup_points": true,
+    "manual_only_mode_is_allowed": true
+  },
+  "planned_nodes": [
+    {
+      "node_id": "watch-competitor-signals",
+      "family": "monitor",
+      "canonical_owner": "nerv-eva02",
+      "description": "读取已接入竞品信号或变化记录。",
+      "input_artifacts": ["manual_input.json"],
+      "output_artifact": "watch.json",
+      "optional": true
+    },
+    {
+      "node_id": "collect-competitor-pages",
+      "family": "collect",
+      "canonical_owner": "nerv-mari",
+      "description": "在公开竞品页可达时补采页面和活动信息。",
+      "input_artifacts": ["manual_input.json"],
+      "output_artifact": "raw.json",
+      "optional": true
+    },
+    {
+      "node_id": "normalize-competitor-delta",
+      "family": "normalize",
+      "canonical_owner": "nerv-eva00",
+      "description": "整理竞品差异、变化摘要、价格带和影响点。",
+      "input_artifacts": ["manual_input.json", "watch.json", "raw.json"],
+      "output_artifact": "delta.json"
+    },
+    {
+      "node_id": "compose-competitor-watch",
+      "family": "compose",
+      "canonical_owner": "nerv-eva13",
+      "description": "生成可直接给运营和商品团队使用的竞品跟踪稿。",
+      "input_artifact": "delta.json",
+      "output_artifact": "competitor_watch.md"
+    },
+    {
+      "node_id": "notify-competitor-watch",
+      "family": "notify",
+      "canonical_owner": "nerv-misato",
+      "description": "交付竞品跟踪结果。",
+      "input_artifacts": ["competitor_watch.md", "delta.json"],
+      "output_artifact": "sent.json"
+    },
+    {
+      "node_id": "memory-competitor-pattern",
+      "family": "memory",
+      "canonical_owner": "nerv-rei",
+      "description": "异步沉淀高复用竞品差异表达和跟踪套路。",
+      "input_artifacts": ["competitor_watch.md", "delta.json"],
+      "output_artifact": "memory_note.json",
+      "optional": true
+    }
+  ],
+  "edges": [
+    { "from": "watch-competitor-signals", "to": "normalize-competitor-delta" },
+    { "from": "collect-competitor-pages", "to": "normalize-competitor-delta" },
+    { "from": "normalize-competitor-delta", "to": "compose-competitor-watch" },
+    { "from": "compose-competitor-watch", "to": "notify-competitor-watch" },
+    { "from": "notify-competitor-watch", "to": "memory-competitor-pattern" }
+  ]
+}

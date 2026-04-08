@@ -77,6 +77,13 @@ function getDb() {
       migrateSchema(_db, initSql);
       ensureRequiredColumns(_db, {
         tasks: {
+          repair_mode: "TEXT DEFAULT 'new' CHECK(repair_mode IN ('new','repair'))",
+          repair_of_task_id: 'TEXT',
+          target_session_key: 'TEXT',
+          workflow_id: 'TEXT',
+          workflow_cn_name: 'TEXT',
+          entry_mode: "TEXT CHECK(entry_mode IS NULL OR entry_mode IN ('template','builder_script','freeform'))",
+          resolved_from: 'TEXT',
           orchestrator_agent_id: "TEXT DEFAULT 'nerv-misato'",
           orchestrator_session_key: 'TEXT',
           session_strategy: "TEXT DEFAULT 'main'"
@@ -269,6 +276,13 @@ async function withRetry(fn, retries = MAX_RETRIES) {
 async function createTask(taskId, initiatorId, intent, priority = 0, dagJson = null, options = {}) {
   const orchestratorAgentId = options.orchestratorAgentId || 'nerv-misato';
   const sessionStrategy = normalizeSessionStrategy(options.sessionStrategy);
+  const repairMode = options.repairMode || 'new';
+  const repairOfTaskId = options.repairOfTaskId || null;
+  const targetSessionKey = options.targetSessionKey || null;
+  const workflowId = options.workflowId || null;
+  const workflowCnName = options.workflowCnName || null;
+  const entryMode = options.entryMode || null;
+  const resolvedFrom = options.resolvedFrom || null;
   const orchestratorSessionKey = options.orchestratorSessionKey || (
     sessionStrategy === 'task_scoped'
       ? buildTaskSessionKey(orchestratorAgentId, taskId)
@@ -276,12 +290,45 @@ async function createTask(taskId, initiatorId, intent, priority = 0, dagJson = n
   );
   const result = await withRetry((db) => {
     db.prepare(`
-      INSERT INTO tasks (task_id, initiator_id, intent, priority, dag_json, orchestrator_agent_id, orchestrator_session_key, session_strategy)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(taskId, initiatorId, intent, priority, dagJson, orchestratorAgentId, orchestratorSessionKey, sessionStrategy);
+      INSERT INTO tasks (
+        task_id, initiator_id, intent, priority, dag_json,
+        repair_mode, repair_of_task_id, target_session_key,
+        workflow_id, workflow_cn_name, entry_mode, resolved_from,
+        orchestrator_agent_id, orchestrator_session_key, session_strategy
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      taskId,
+      initiatorId,
+      intent,
+      priority,
+      dagJson,
+      repairMode,
+      repairOfTaskId,
+      targetSessionKey,
+      workflowId,
+      workflowCnName,
+      entryMode,
+      resolvedFrom,
+      orchestratorAgentId,
+      orchestratorSessionKey,
+      sessionStrategy
+    );
     return taskId;
   });
-  await writeAuditLog(taskId, null, orchestratorAgentId, 'CREATE_TASK', JSON.stringify({ intent, priority, session_strategy: sessionStrategy, orchestrator_session_key: orchestratorSessionKey }));
+  await writeAuditLog(taskId, null, orchestratorAgentId, 'CREATE_TASK', JSON.stringify({
+    intent,
+    priority,
+    session_strategy: sessionStrategy,
+    orchestrator_session_key: orchestratorSessionKey,
+    repair_mode: repairMode,
+    repair_of_task_id: repairOfTaskId,
+    target_session_key: targetSessionKey,
+    workflow_id: workflowId,
+    workflow_cn_name: workflowCnName,
+    entry_mode: entryMode,
+    resolved_from: resolvedFrom
+  }));
   return result;
 }
 
@@ -741,7 +788,14 @@ async function createFullDag({
   edges = [],
   orchestratorAgentId = 'nerv-misato',
   orchestratorSessionKey = null,
-  sessionStrategy = 'task_scoped'
+  sessionStrategy = 'task_scoped',
+  repairMode = 'new',
+  repairOfTaskId = null,
+  targetSessionKey = null,
+  workflowId = null,
+  workflowCnName = null,
+  entryMode = null,
+  resolvedFrom = null
 }) {
   return withRetry((db) => {
     const normalizedStrategy = normalizeSessionStrategy(sessionStrategy);
@@ -763,9 +817,30 @@ async function createFullDag({
     const txn = db.transaction(() => {
       // 1. 创建 Task
       db.prepare(`
-        INSERT INTO tasks (task_id, initiator_id, intent, priority, dag_json, orchestrator_agent_id, orchestrator_session_key, session_strategy)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(taskId, initiatorId, intent, priority, dagJson, orchestratorAgentId, effectiveOrchestratorSessionKey, normalizedStrategy);
+        INSERT INTO tasks (
+          task_id, initiator_id, intent, priority, dag_json,
+          repair_mode, repair_of_task_id, target_session_key,
+          workflow_id, workflow_cn_name, entry_mode, resolved_from,
+          orchestrator_agent_id, orchestrator_session_key, session_strategy
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        taskId,
+        initiatorId,
+        intent,
+        priority,
+        dagJson,
+        repairMode,
+        repairOfTaskId,
+        targetSessionKey,
+        workflowId,
+        workflowCnName,
+        entryMode,
+        resolvedFrom,
+        orchestratorAgentId,
+        effectiveOrchestratorSessionKey,
+        normalizedStrategy
+      );
 
       db.prepare(`
         INSERT INTO task_session_bindings (task_id, agent_id, node_id, session_key, session_scope, created_at, updated_at)
@@ -821,6 +896,13 @@ async function createFullDag({
       `).run(taskId, initiatorId, JSON.stringify({
         node_count: nodes.length,
         edge_count: edges.length,
+        repair_mode: repairMode,
+        repair_of_task_id: repairOfTaskId,
+        target_session_key: targetSessionKey,
+        workflow_id: workflowId,
+        workflow_cn_name: workflowCnName,
+        entry_mode: entryMode,
+        resolved_from: resolvedFrom,
         session_strategy: normalizedStrategy,
         orchestrator_agent_id: orchestratorAgentId,
         orchestrator_session_key: effectiveOrchestratorSessionKey
@@ -839,6 +921,13 @@ async function createFullDag({
       taskId,
       nodesCreated: nodes.length,
       edgesCreated: edges.length,
+      repairMode,
+      repairOfTaskId,
+      targetSessionKey,
+      workflowId,
+      workflowCnName,
+      entryMode,
+      resolvedFrom,
       orchestratorSessionKey: effectiveOrchestratorSessionKey,
       sessionStrategy: normalizedStrategy,
       workerSessions

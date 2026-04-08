@@ -5,9 +5,13 @@ data/**
 !data/
 !data/db/
 !data/db/.gitkeep
+!data/security-audit-*/
 *.db
 *.db-shm
 *.db-wal
+
+# 本地安全审计产物（允许目录存在，但文件绝不上传）
+data/security-audit-*/**
 
 # ═══ Agent 运行时产出（绝对不上传）═══
 # DAG 任务产出（Agent 跑任务时生成的所有文件）
@@ -44,6 +48,7 @@ agents/*/.tables
 README.proposed.md
 agents/*/SKILLS/
 agents/eva-02/execute_search.py
+docs/knowledge-base/
 
 # ═══ Node.js ═══
 node_modules/

@@ -29,6 +29,15 @@ CREATE TABLE IF NOT EXISTS tasks (
   initiator_id    TEXT NOT NULL,                    -- 飞书 user_id / CLI 来源
   intent          TEXT NOT NULL,                    -- 任务意图描述
   priority        INTEGER DEFAULT 0,               -- 0=normal, 1=high, 2=urgent
+  repair_mode     TEXT DEFAULT 'new'
+    CHECK(repair_mode IN ('new','repair')),        -- 新任务 / 返工修复任务
+  repair_of_task_id TEXT,                           -- 若为返工任务，对应原 task_id
+  target_session_key TEXT,                          -- 返工时优先关联的旧会话
+  workflow_id     TEXT,                             -- 命中的固定 workflow 标识（若有）
+  workflow_cn_name TEXT,                            -- 中文工作流名（便于审计与告警）
+  entry_mode      TEXT
+    CHECK(entry_mode IS NULL OR entry_mode IN ('template','builder_script','freeform')),
+  resolved_from   TEXT,                             -- workflow 命中的来源：query/workflow_id/manual/builder_script
   orchestrator_agent_id TEXT DEFAULT 'nerv-misato', -- 当前任务的主编排者
   orchestrator_session_key TEXT,                    -- 当前任务的编排会话（main / task scoped）
   session_strategy TEXT DEFAULT 'main'

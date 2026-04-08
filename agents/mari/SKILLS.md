@@ -8,4 +8,4 @@
 ## 核心工具
 - `exec` — 运行爬虫脚本
 - `read` / `write` — 数据读写
-- `sessions_send` — 向 shinji 报告抓取结果
+- `sessions_send` — 向当前编排者回传抓取结果（以 `dispatch.source` 为准）
