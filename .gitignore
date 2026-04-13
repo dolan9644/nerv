@@ -49,6 +49,8 @@ README.proposed.md
 agents/*/SKILLS/
 agents/eva-02/execute_search.py
 docs/knowledge-base/
+docs-internal/
+.publish-local/
 
 # ═══ Node.js ═══
 node_modules/
