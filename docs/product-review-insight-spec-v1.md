@@ -109,4 +109,4 @@
 - `agency-agents`
   - 吸收 `audit / review / brief / competitor summary` 结构
 - `OpenHarness`
-  - 吸收 `install validation / task lifecycle / plugin discoverability` 的底座要求
+  - 吸收 `task lifecycle / acceptance / terminal state` 的系统表达

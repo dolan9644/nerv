@@ -11,8 +11,7 @@
 - 下一场直播可以复用其中的结构
 - Recorder / Spear / Rei 能识别并沉淀
 
-这份文档是 `live-session-script` 的单一事实源。
-相关 `roadmap / registry / workflow template / skill` 都应以这里为准。
+这份文档描述的是用户侧可直接使用的直播脚本能力边界、输入要求和交付标准。
 
 ## 输入规格
 
